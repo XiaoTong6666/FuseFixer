@@ -1,9 +1,17 @@
 #include <android/log.h>
 #include <dirent.h>
-#include <dlfcn.h>
 #include <elf.h>
 #include <link.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include "third_party/xz-embedded/linux_xz.h"
+#ifdef __cplusplus
+}
+#endif
+
+#include <algorithm>
 #include <cctype>
 #include <cstdarg>
 #include <cstddef>
@@ -13,6 +21,7 @@
 #include <cstring>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <fcntl.h>
 #include <optional>
 #include <string>
@@ -24,14 +33,13 @@
 
 namespace {
 
-constexpr const char* kLogTag = "LSPosedFuseFixer";
+constexpr const char* kLogTag = "FuseFixer";
 constexpr const char* kTargetLibrary = "libfuse_jni.so";
 
-// ICU function pointer (resolved via dlsym at init time)
-// Original binary calls u_hasBinaryProperty(cp, UCHAR_DEFAULT_IGNORABLE_CODE_POINT)
-// where UCHAR_DEFAULT_IGNORABLE_CODE_POINT == 5.
+// Original binary directly imports u_hasBinaryProperty from libicu.so.
 using UHasBinaryPropertyFn = int8_t (*)(uint32_t codePoint, int32_t which);
-UHasBinaryPropertyFn gUHasBinaryProperty = nullptr;
+extern "C" int8_t u_hasBinaryProperty(uint32_t codePoint, int32_t which);
+UHasBinaryPropertyFn gUHasBinaryProperty = u_hasBinaryProperty;
 
 constexpr int32_t kUCHAR_DEFAULT_IGNORABLE_CODE_POINT = 5;
 
@@ -55,13 +63,6 @@ constexpr std::string_view kIsBpfBackingPathSymbols[] = {
     "_ZL19is_bpf_backing_pathRKNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE",
 };
 
-constexpr std::string_view kIsUidAllowedAccessToDataOrObbPathSymbols[] = {
-    "_ZN13mediaprovider4fuse20MediaProviderWrapper33isUidAllowedAccessToDataOrObbPathEjRKNSt6__"
-    "ndk112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE",
-    "_ZN13mediaprovider4fuse20MediaProviderWrapper33isUidAllowedAccessToDataOrObbPathEjRKNSt3__"
-    "112basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEE",
-};
-
 constexpr std::string_view kStrcasecmpSymbol = "strcasecmp";
 
 constexpr std::string_view kEqualsIgnoreCaseSymbols[] = {
@@ -73,8 +74,6 @@ using HookInstaller = int (*)(void* target, void* replacement, void** backup);
 using IsAppAccessiblePathFn = bool (*)(void* fuse, const std::string& path, uint32_t uid);
 using IsPackageOwnedPathFn = bool (*)(const std::string& lhs, const std::string& rhs);
 using IsBpfBackingPathFn = bool (*)(const std::string& path);
-using IsUidAllowedAccessToDataOrObbPathFn = bool (*)(void* wrapper, uint32_t uid,
-                                                     const std::string& path);
 
 #if defined(__LP64__)
 using ElfHeader = Elf64_Ehdr;
@@ -94,9 +93,10 @@ using ElfRelocationWithAddend = Elf32_Rel;
 using ElfRelocationNoAddend = Elf32_Rel;
 #endif
 
-struct NativeApi {
-    void* reserved0;
-    HookInstaller install_hook;
+struct NativeApiEntries {
+    uint32_t version;
+    HookInstaller hookFunc;
+    void* unhookFunc;
 };
 
 struct ModuleInfo {
@@ -107,19 +107,64 @@ struct ModuleInfo {
 };
 
 struct MappedFile {
-    void* address = MAP_FAILED;
+    void* mapping = MAP_FAILED;
+    size_t mappingSize = 0;
+    const std::byte* data = nullptr;
     size_t size = 0;
+    std::shared_ptr<std::vector<std::byte>> owned;
+
+    MappedFile() = default;
+    MappedFile(void* mapping_, size_t mappingSize_, const std::byte* data_, size_t size_)
+        : mapping(mapping_), mappingSize(mappingSize_), data(data_), size(size_) {
+    }
+    MappedFile(const MappedFile&) = delete;
+    MappedFile& operator=(const MappedFile&) = delete;
+
+    MappedFile(MappedFile&& other) noexcept
+        : mapping(other.mapping),
+          mappingSize(other.mappingSize),
+          data(other.data),
+          size(other.size),
+          owned(std::move(other.owned)) {
+        other.mapping = MAP_FAILED;
+        other.mappingSize = 0;
+        other.data = nullptr;
+        other.size = 0;
+    }
+
+    MappedFile& operator=(MappedFile&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        if (mapping != MAP_FAILED) {
+            munmap(mapping, mappingSize);
+        }
+        mapping = other.mapping;
+        mappingSize = other.mappingSize;
+        data = other.data;
+        size = other.size;
+        owned = std::move(other.owned);
+        other.mapping = MAP_FAILED;
+        other.mappingSize = 0;
+        other.data = nullptr;
+        other.size = 0;
+        return *this;
+    }
 
     ~MappedFile() {
-        if (address != MAP_FAILED) {
-            munmap(address, size);
+        if (mapping != MAP_FAILED) {
+            munmap(mapping, mappingSize);
         }
     }
 
     const std::byte* bytes() const {
-        return reinterpret_cast<const std::byte*>(address);
+        return data;
     }
 };
+
+constexpr uint32_t kMaxGnuDebugdataOutputBytes = 16 * 1024 * 1024;
+constexpr uint32_t kMaxGnuDebugdataDictBytes = 16 * 1024 * 1024;
+std::once_flag gXzCrcInitOnce;
 
 // Matches the original binary's internal ELF info structure layout.
 // reads fields at offsets:
@@ -195,17 +240,15 @@ HookInstaller gHookInstaller = nullptr;
 IsAppAccessiblePathFn gOriginalIsAppAccessiblePath = nullptr;
 IsPackageOwnedPathFn gOriginalIsPackageOwnedPath = nullptr;
 IsBpfBackingPathFn gOriginalIsBpfBackingPath = nullptr;
-IsUidAllowedAccessToDataOrObbPathFn gOriginalIsUidAllowedAccessToDataOrObbPath = nullptr;
 void* gOriginalStrcasecmp = nullptr;
 void* gOriginalEqualsIgnoreCase = nullptr;
 
 std::atomic<int> gAppAccessibleLogCount{0};
 std::atomic<int> gPackageOwnedLogCount{0};
 std::atomic<int> gBpfBackingLogCount{0};
-std::atomic<int> gDataOrObbLogCount{0};
 std::atomic<int> gStrcasecmpLogCount{0};
 std::atomic<int> gEqualsIgnoreCaseLogCount{0};
-
+std::atomic<int> gSuspiciousDirectLogCount{0};
 std::string EscapeForLog(const uint8_t* data, size_t length);
 
 bool ShouldLogLimited(std::atomic<int>& counter, int limit = 8) {
@@ -218,13 +261,30 @@ std::string DebugPreview(std::string_view value, size_t limit = 96) {
     return EscapeForLog(reinterpret_cast<const uint8_t*>(value.data()), n);
 }
 
+bool ContainsInterestingIgnorableUtf8Bytes(std::string_view value) {
+    return value.find("\xE2\x80\x8B") != std::string_view::npos ||  // U+200B
+           value.find("\xE2\x80\x8C") != std::string_view::npos ||  // U+200C
+           value.find("\xE2\x80\x8D") != std::string_view::npos ||  // U+200D
+           value.find("\xE2\x81\xA0") != std::string_view::npos ||  // U+2060
+           value.find("\xEF\xBB\xBF") != std::string_view::npos;    // U+FEFF
+}
+
+void LogSuspiciousDirectPath(const char* hookName, std::string_view path) {
+    if (!ContainsInterestingIgnorableUtf8Bytes(path) ||
+        !ShouldLogLimited(gSuspiciousDirectLogCount, 16)) {
+        return;
+    }
+    __android_log_print(5, kLogTag,
+                        "%s direct path still contains interesting zero-width bytes, "
+                        "NeedsSanitization returned false path=%s icu=%p",
+                        hookName, DebugPreview(path).c_str(),
+                        reinterpret_cast<void*>(gUHasBinaryProperty));
+}
+
 // IsDefaultIgnorableCodePoint via ICU
 
 bool IsDefaultIgnorableCodePoint(uint32_t cp) {
-    if (gUHasBinaryProperty == nullptr) {
-        return false;
-    }
-    return gUHasBinaryProperty(cp, kUCHAR_DEFAULT_IGNORABLE_CODE_POINT) != 0;
+    return u_hasBinaryProperty(cp, kUCHAR_DEFAULT_IGNORABLE_CODE_POINT) != 0;
 }
 
 // Logging helpers — match original log format exactly
@@ -670,6 +730,7 @@ bool WrappedIsAppAccessiblePath(void* fuse, const std::string& path, uint32_t ui
         return false;
     }
     if (!NeedsSanitization(path)) {
+        LogSuspiciousDirectPath("app_accessible", path);
         if (ShouldLogLimited(gAppAccessibleLogCount)) {
             __android_log_print(3, kLogTag, "app_accessible direct uid=%u path=%s", uid,
                                 DebugPreview(path).c_str());
@@ -694,6 +755,7 @@ bool WrappedIsPackageOwnedPath(const std::string& lhs, const std::string& rhs) {
         return false;
     }
     if (!NeedsSanitization(lhs)) {
+        LogSuspiciousDirectPath("package_owned", lhs);
         if (ShouldLogLimited(gPackageOwnedLogCount)) {
             __android_log_print(3, kLogTag, "package_owned direct lhs=%s rhs=%s",
                                 DebugPreview(lhs).c_str(), DebugPreview(rhs).c_str());
@@ -716,6 +778,7 @@ bool WrappedIsBpfBackingPath(const std::string& path) {
         return false;
     }
     if (!NeedsSanitization(path)) {
+        LogSuspiciousDirectPath("bpf_backing", path);
         if (ShouldLogLimited(gBpfBackingLogCount)) {
             __android_log_print(3, kLogTag, "bpf_backing direct path=%s",
                                 DebugPreview(path).c_str());
@@ -729,27 +792,6 @@ bool WrappedIsBpfBackingPath(const std::string& path) {
                             DebugPreview(path).c_str(), DebugPreview(sanitized).c_str());
     }
     return gOriginalIsBpfBackingPath(sanitized);
-}
-
-bool WrappedIsUidAllowedAccessToDataOrObbPath(void* wrapper, uint32_t uid,
-                                              const std::string& path) {
-    if (gOriginalIsUidAllowedAccessToDataOrObbPath == nullptr) {
-        return false;
-    }
-    if (!NeedsSanitization(path)) {
-        if (ShouldLogLimited(gDataOrObbLogCount)) {
-            __android_log_print(3, kLogTag, "data_obb direct uid=%u path=%s", uid,
-                                DebugPreview(path).c_str());
-        }
-        return gOriginalIsUidAllowedAccessToDataOrObbPath(wrapper, uid, path);
-    }
-    std::string sanitized(path);
-    RewriteString(sanitized);
-    if (ShouldLogLimited(gDataOrObbLogCount)) {
-        __android_log_print(3, kLogTag, "data_obb rewrite uid=%u old=%s new=%s", uid,
-                            DebugPreview(path).c_str(), DebugPreview(sanitized).c_str());
-    }
-    return gOriginalIsUidAllowedAccessToDataOrObbPath(wrapper, uid, sanitized);
 }
 
 // WrappedStrcasecmp
@@ -876,13 +918,245 @@ std::optional<MappedFile> MapReadOnlyFile(const std::string& path) {
         return std::nullopt;
     }
 
-    return MappedFile{address, static_cast<size_t>(st.st_size)};
+    return MappedFile{address, static_cast<size_t>(st.st_size),
+                      reinterpret_cast<const std::byte*>(address), static_cast<size_t>(st.st_size)};
+}
+
+std::optional<MappedFile> MakeOwnedFile(std::vector<std::byte> bytes) {
+    if (bytes.empty()) {
+        return std::nullopt;
+    }
+    auto owned = std::make_shared<std::vector<std::byte>>(std::move(bytes));
+    MappedFile file;
+    file.owned = owned;
+    file.data = owned->data();
+    file.size = owned->size();
+    return file;
+}
+
+uint16_t ReadLe16(const std::byte* ptr) {
+    uint16_t value = 0;
+    std::memcpy(&value, ptr, sizeof(value));
+    return value;
+}
+
+uint32_t ReadLe32(const std::byte* ptr) {
+    uint32_t value = 0;
+    std::memcpy(&value, ptr, sizeof(value));
+    return value;
+}
+
+std::optional<MappedFile> MapEmbeddedStoredElf(const std::string& modulePath) {
+    const size_t bang = modulePath.find("!/");
+    if (bang == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::string apkPath = modulePath.substr(0, bang);
+    const std::string entryPath = modulePath.substr(bang + 2);
+
+    auto apk = MapReadOnlyFile(apkPath);
+    if (!apk.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto* bytes = apk->bytes();
+    const size_t size = apk->size;
+    if (size < 22) {
+        return std::nullopt;
+    }
+
+    size_t eocdOffset = std::string::npos;
+    const size_t searchStart = size > (0xFFFF + 22) ? size - (0xFFFF + 22) : 0;
+    for (size_t off = size - 22 + 1; off-- > searchStart;) {
+        if (ReadLe32(bytes + off) == 0x06054b50U) {
+            eocdOffset = off;
+            break;
+        }
+    }
+    if (eocdOffset == std::string::npos) {
+        __android_log_print(5, kLogTag, "embedded apk missing EOCD: %s", apkPath.c_str());
+        return std::nullopt;
+    }
+
+    const uint32_t centralDirOffset = ReadLe32(bytes + eocdOffset + 16);
+    const uint16_t totalEntries = ReadLe16(bytes + eocdOffset + 10);
+    size_t cursor = centralDirOffset;
+    for (uint16_t i = 0; i < totalEntries && cursor + 46 <= size; ++i) {
+        if (ReadLe32(bytes + cursor) != 0x02014b50U) {
+            break;
+        }
+        const uint16_t method = ReadLe16(bytes + cursor + 10);
+        const uint32_t compressedSize = ReadLe32(bytes + cursor + 20);
+        const uint32_t uncompressedSize = ReadLe32(bytes + cursor + 24);
+        const uint16_t nameLen = ReadLe16(bytes + cursor + 28);
+        const uint16_t extraLen = ReadLe16(bytes + cursor + 30);
+        const uint16_t commentLen = ReadLe16(bytes + cursor + 32);
+        const uint32_t localHeaderOffset = ReadLe32(bytes + cursor + 42);
+
+        if (cursor + 46 + nameLen > size) {
+            break;
+        }
+        const char* name = reinterpret_cast<const char*>(bytes + cursor + 46);
+        if (entryPath == std::string_view(name, nameLen)) {
+            if (method != 0) {
+                __android_log_print(5, kLogTag, "embedded entry compressed method=%u path=%s",
+                                    method, entryPath.c_str());
+                return std::nullopt;
+            }
+            if (localHeaderOffset + 30 > size ||
+                ReadLe32(bytes + localHeaderOffset) != 0x04034b50U) {
+                __android_log_print(5, kLogTag, "embedded entry bad local header path=%s",
+                                    entryPath.c_str());
+                return std::nullopt;
+            }
+            const uint16_t localNameLen = ReadLe16(bytes + localHeaderOffset + 26);
+            const uint16_t localExtraLen = ReadLe16(bytes + localHeaderOffset + 28);
+            const size_t dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
+            if (dataOffset + uncompressedSize > size || compressedSize != uncompressedSize) {
+                return std::nullopt;
+            }
+
+            MappedFile embedded = std::move(*apk);
+            embedded.data = bytes + dataOffset;
+            embedded.size = uncompressedSize;
+            __android_log_print(4, kLogTag, "mapped embedded elf entry=%s size=%u",
+                                entryPath.c_str(), uncompressedSize);
+            return embedded;
+        }
+
+        cursor += 46 + nameLen + extraLen + commentLen;
+    }
+
+    __android_log_print(5, kLogTag, "embedded entry not found: %s", entryPath.c_str());
+    return std::nullopt;
+}
+
+std::optional<std::pair<const std::byte*, size_t>> FindNamedSectionData(const MappedFile& file,
+                                                                        std::string_view name) {
+    const auto* header = reinterpret_cast<const ElfHeader*>(file.bytes());
+    if (header == nullptr || std::memcmp(header->e_ident, ELFMAG, SELFMAG) != 0) {
+        return std::nullopt;
+    }
+    if (header->e_shoff == 0 || header->e_shnum == 0 || header->e_shentsize != sizeof(ElfSection) ||
+        header->e_shstrndx >= header->e_shnum) {
+        return std::nullopt;
+    }
+
+    const auto* sections = reinterpret_cast<const ElfSection*>(file.bytes() + header->e_shoff);
+    const auto& shstrtab = sections[header->e_shstrndx];
+    if (shstrtab.sh_offset + shstrtab.sh_size > file.size) {
+        return std::nullopt;
+    }
+    const char* sectionNames = reinterpret_cast<const char*>(file.bytes() + shstrtab.sh_offset);
+    for (uint16_t sectionIndex = 0; sectionIndex < header->e_shnum; ++sectionIndex) {
+        const auto& section = sections[sectionIndex];
+        if (section.sh_name >= shstrtab.sh_size ||
+            section.sh_offset + section.sh_size > file.size) {
+            continue;
+        }
+        const char* currentName = sectionNames + section.sh_name;
+        if (name == currentName) {
+            return std::pair<const std::byte*, size_t>{file.bytes() + section.sh_offset,
+                                                       static_cast<size_t>(section.sh_size)};
+        }
+    }
+    return std::nullopt;
+}
+
+const char* XzRetName(enum xz_ret ret) {
+    switch (ret) {
+        case XZ_OK:
+            return "XZ_OK";
+        case XZ_STREAM_END:
+            return "XZ_STREAM_END";
+        case XZ_UNSUPPORTED_CHECK:
+            return "XZ_UNSUPPORTED_CHECK";
+        case XZ_MEM_ERROR:
+            return "XZ_MEM_ERROR";
+        case XZ_MEMLIMIT_ERROR:
+            return "XZ_MEMLIMIT_ERROR";
+        case XZ_FORMAT_ERROR:
+            return "XZ_FORMAT_ERROR";
+        case XZ_OPTIONS_ERROR:
+            return "XZ_OPTIONS_ERROR";
+        case XZ_DATA_ERROR:
+            return "XZ_DATA_ERROR";
+        case XZ_BUF_ERROR:
+            return "XZ_BUF_ERROR";
+        default:
+            return "XZ_UNKNOWN";
+    }
+}
+
+std::optional<MappedFile> DecompressGnuDebugdata(const std::byte* compressed, size_t size) {
+    if (compressed == nullptr || size == 0) {
+        return std::nullopt;
+    }
+
+    std::call_once(gXzCrcInitOnce, []() { xz_crc32_init(); });
+
+    struct DecoderDeleter {
+        void operator()(xz_dec* decoder) const {
+            xz_dec_end(decoder);
+        }
+    };
+
+    std::unique_ptr<xz_dec, DecoderDeleter> decoder(
+        xz_dec_init(XZ_DYNALLOC, kMaxGnuDebugdataDictBytes));
+    if (decoder == nullptr) {
+        __android_log_print(5, kLogTag, "gnu_debugdata xz_dec_init failed");
+        return std::nullopt;
+    }
+
+    std::vector<std::byte> output(64 * 1024);
+    struct xz_buf buffer = {};
+    buffer.in = reinterpret_cast<const uint8_t*>(compressed);
+    buffer.in_size = size;
+    buffer.out = reinterpret_cast<uint8_t*>(output.data());
+    buffer.out_size = output.size();
+
+    while (true) {
+        const enum xz_ret ret = xz_dec_run(decoder.get(), &buffer);
+        if (ret == XZ_STREAM_END) {
+            output.resize(buffer.out_pos);
+            __android_log_print(4, kLogTag, "decompressed .gnu_debugdata in=%zu out=%zu", size,
+                                output.size());
+            return MakeOwnedFile(std::move(output));
+        }
+        if (ret == XZ_UNSUPPORTED_CHECK) {
+            continue;
+        }
+        if (ret == XZ_OK) {
+            if (buffer.out_pos == buffer.out_size) {
+                if (output.size() >= kMaxGnuDebugdataOutputBytes) {
+                    __android_log_print(5, kLogTag, "gnu_debugdata output too large >= %u",
+                                        kMaxGnuDebugdataOutputBytes);
+                    return std::nullopt;
+                }
+                const size_t oldOutPos = buffer.out_pos;
+                const size_t nextSize =
+                    std::min<size_t>(output.size() * 2, kMaxGnuDebugdataOutputBytes);
+                output.resize(nextSize);
+                buffer.out = reinterpret_cast<uint8_t*>(output.data());
+                buffer.out_pos = oldOutPos;
+                buffer.out_size = output.size();
+            }
+            continue;
+        }
+
+        __android_log_print(
+            5, kLogTag, "gnu_debugdata decompress failed ret=%s in_pos=%zu/%zu out_pos=%zu/%zu",
+            XzRetName(ret), buffer.in_pos, buffer.in_size, buffer.out_pos, buffer.out_size);
+        return std::nullopt;
+    }
 }
 
 // Section-based symbol lookup (fallback path)
-std::optional<uintptr_t> FindSymbolOffset(const MappedFile& file, std::string_view symbolName) {
+std::optional<uintptr_t> FindSymbolOffsetImpl(const MappedFile& file, std::string_view symbolName,
+                                              int depth) {
     const auto* header = reinterpret_cast<const ElfHeader*>(file.bytes());
-    if (header == nullptr || std::memcmp(header->e_ident, ELFMAG, SELFMAG) != 0) {
+    if (header == nullptr || std::memcmp(header->e_ident, ELFMAG, SELFMAG) != 0 ||
+        header->e_shoff == 0 || header->e_shnum == 0 || header->e_shentsize != sizeof(ElfSection)) {
         return std::nullopt;
     }
 
@@ -892,7 +1166,15 @@ std::optional<uintptr_t> FindSymbolOffset(const MappedFile& file, std::string_vi
         if (section.sh_type != SHT_SYMTAB && section.sh_type != SHT_DYNSYM) {
             continue;
         }
+        if (section.sh_link >= header->e_shnum || section.sh_entsize != sizeof(ElfSymbol) ||
+            section.sh_size == 0) {
+            continue;
+        }
         const auto& strtab = sections[section.sh_link];
+        if (strtab.sh_offset + strtab.sh_size > file.size ||
+            section.sh_offset + section.sh_size > file.size) {
+            continue;
+        }
         const char* strings = reinterpret_cast<const char*>(file.bytes() + strtab.sh_offset);
         const auto* symbols = reinterpret_cast<const ElfSymbol*>(file.bytes() + section.sh_offset);
         const size_t symbolCount = section.sh_size / sizeof(ElfSymbol);
@@ -907,7 +1189,33 @@ std::optional<uintptr_t> FindSymbolOffset(const MappedFile& file, std::string_vi
             }
         }
     }
-    return std::nullopt;
+
+    if (depth >= 2) {
+        return std::nullopt;
+    }
+
+    auto debugdata = FindNamedSectionData(file, ".gnu_debugdata");
+    if (!debugdata.has_value()) {
+        return std::nullopt;
+    }
+
+    auto decompressed = DecompressGnuDebugdata(debugdata->first, debugdata->second);
+    if (!decompressed.has_value()) {
+        return std::nullopt;
+    }
+
+    const std::string symbolNameString(symbolName);
+    __android_log_print(4, kLogTag, "searching .gnu_debugdata for %s", symbolNameString.c_str());
+    auto offset = FindSymbolOffsetImpl(*decompressed, symbolName, depth + 1);
+    if (offset.has_value()) {
+        __android_log_print(4, kLogTag, "resolved from .gnu_debugdata %s value=%p",
+                            symbolNameString.c_str(), reinterpret_cast<void*>(*offset));
+    }
+    return offset;
+}
+
+std::optional<uintptr_t> FindSymbolOffset(const MappedFile& file, std::string_view symbolName) {
+    return FindSymbolOffsetImpl(file, symbolName, 0);
 }
 
 std::optional<size_t> VirtualAddressToFileOffset(const MappedFile& file, uintptr_t address) {
@@ -1741,22 +2049,35 @@ std::optional<void*> ResolveTargetSymbol(const ModuleInfo& module, std::string_v
 std::optional<void*> ResolveTargetSymbolRuntime(const ModuleInfo& module,
                                                 std::string_view symbolName) {
     auto dynInfo = ParseRuntimeDynamicInfo(module);
-    if (!dynInfo.has_value()) {
+    if (dynInfo.has_value()) {
+        const auto* nameData = reinterpret_cast<const uint8_t*>(symbolName.data());
+        const size_t nameLen = symbolName.size();
+        auto symIdx = FindRuntimeSymbolIndex(*dynInfo, nameData, nameLen);
+        if (symIdx.has_value()) {
+            const auto& sym = dynInfo->symtab[*symIdx];
+            if (sym.st_value != 0) {
+                return reinterpret_cast<void*>(module.base + sym.st_value);
+            }
+        }
+    }
+
+    std::optional<MappedFile> mapped;
+    if (module.path.find("!/") != std::string::npos) {
+        mapped = MapEmbeddedStoredElf(module.path);
+    } else {
+        mapped = MapReadOnlyFile(module.path);
+    }
+
+    if (!mapped.has_value()) {
         return std::nullopt;
     }
 
-    const auto* nameData = reinterpret_cast<const uint8_t*>(symbolName.data());
-    const size_t nameLen = symbolName.size();
-    auto symIdx = FindRuntimeSymbolIndex(*dynInfo, nameData, nameLen);
-    if (!symIdx.has_value()) {
+    auto offset = FindSymbolOffset(*mapped, symbolName);
+    if (!offset.has_value()) {
         return std::nullopt;
     }
 
-    const auto& sym = dynInfo->symtab[*symIdx];
-    if (sym.st_value == 0) {
-        return std::nullopt;
-    }
-    return reinterpret_cast<void*>(module.base + sym.st_value);
+    return reinterpret_cast<void*>(module.base + *offset);
 }
 
 // Inline hook installer (for path functions)
@@ -1788,47 +2109,6 @@ bool InstallHookForSymbol(std::string_view symbolName, void* replacement, void**
                         std::string(symbolName).c_str(), *target,
                         backup != nullptr ? *backup : nullptr);
     return true;
-}
-
-// Resolve ICU u_hasBinaryProperty
-
-void ResolveIcuFunction() {
-    // Try various ICU library names
-    void* icuHandle = dlopen("libicuuc.so", RTLD_NOW | RTLD_NOLOAD);
-    if (icuHandle == nullptr) {
-        icuHandle = dlopen("libandroidicu.so", RTLD_NOW | RTLD_NOLOAD);
-    }
-    if (icuHandle == nullptr) {
-        icuHandle = dlopen("libicuuc.so", RTLD_NOW);
-    }
-    if (icuHandle == nullptr) {
-        icuHandle = dlopen("libandroidicu.so", RTLD_NOW);
-    }
-    if (icuHandle == nullptr) {
-        return;
-    }
-
-    // Try versioned symbols first (Android uses versioned ICU exports)
-    // Try a range of common ICU versions
-    char buf[64];
-    for (int ver = 75; ver >= 44; --ver) {
-        std::snprintf(buf, sizeof(buf), "u_hasBinaryProperty_%d", ver);
-        auto* fn = reinterpret_cast<UHasBinaryPropertyFn>(dlsym(icuHandle, buf));
-        if (fn != nullptr) {
-            gUHasBinaryProperty = fn;
-            __android_log_print(4, kLogTag, "resolved ICU symbol %s", buf);
-            return;
-        }
-    }
-
-    // Try unversioned
-    auto* fn = reinterpret_cast<UHasBinaryPropertyFn>(dlsym(icuHandle, "u_hasBinaryProperty"));
-    if (fn != nullptr) {
-        gUHasBinaryProperty = fn;
-        __android_log_print(4, kLogTag, "resolved ICU symbol u_hasBinaryProperty");
-    } else {
-        __android_log_print(5, kLogTag, "failed to resolve ICU u_hasBinaryProperty");
-    }
 }
 
 // Main initialization — InstallFuseHooks
@@ -1891,25 +2171,12 @@ void InstallFuseHooks() {
         break;
     }
 
-    // MediaProviderWrapper::isUidAllowedAccessToDataOrObbPath
-    for (const auto& sym : kIsUidAllowedAccessToDataOrObbPathSymbols) {
-        auto target = useRuntimeElf ? ResolveTargetSymbolRuntime(*module, sym)
-                                    : ResolveTargetSymbol(*module, sym);
-        if (!target.has_value())
-            continue;
-        const int status = gHookInstaller(
-            *target, reinterpret_cast<void*>(+WrappedIsUidAllowedAccessToDataOrObbPath),
-            reinterpret_cast<void**>(&gOriginalIsUidAllowedAccessToDataOrObbPath));
-        if (status != 0) {
-            __android_log_print(6, kLogTag, "hook isUidAllowedAccessToDataOrObbPath failed: %d",
-                                status);
-            continue;
-        }
-        __android_log_print(4, kLogTag, "inline hook ok %s target=%p backup=%p",
-                            std::string(sym).c_str(), *target,
-                            reinterpret_cast<void*>(gOriginalIsUidAllowedAccessToDataOrObbPath));
-        break;
-    }
+    __android_log_print(4, kLogTag,
+                        "hook summary app=%p package=%p bpf=%p strcasecmp=%p equals=%p icu=%p",
+                        reinterpret_cast<void*>(gOriginalIsAppAccessiblePath),
+                        reinterpret_cast<void*>(gOriginalIsPackageOwnedPath),
+                        reinterpret_cast<void*>(gOriginalIsBpfBackingPath), gOriginalStrcasecmp,
+                        gOriginalEqualsIgnoreCase, reinterpret_cast<void*>(gUHasBinaryProperty));
 
     // Compare hooks (relocation/GOT patching)
 
@@ -2013,11 +2280,11 @@ void InstallFuseHooks() {
 
 // Entry points
 
-extern "C" int PostNativeInit(void*, void*, const char*, void*, void*, void*, void*, void*,
-                              const char*, void*, uint64_t*, uint64_t**, uint32_t*, long*, long,
-                              void**) {
+extern "C" void PostNativeInit(const char* loadedLibrary, void*) {
+    if (loadedLibrary == nullptr || std::strstr(loadedLibrary, kTargetLibrary) == nullptr) {
+        return;
+    }
     InstallFuseHooks();
-    return 0;
 }
 
 }  // namespace
@@ -2025,10 +2292,7 @@ extern "C" int PostNativeInit(void*, void*, const char*, void*, void*, void*, vo
 extern "C" __attribute__((visibility("default"))) void* native_init(void* api) {
     __android_log_print(4, kLogTag, "Loaded");
     if (api != nullptr) {
-        gHookInstaller = reinterpret_cast<NativeApi*>(api)->install_hook;
+        gHookInstaller = reinterpret_cast<const NativeApiEntries*>(api)->hookFunc;
     }
-    __android_log_print(4, kLogTag, "native_init api=%p installer=%p", api,
-                        reinterpret_cast<void*>(gHookInstaller));
-    ResolveIcuFunction();
     return reinterpret_cast<void*>(+PostNativeInit);
 }

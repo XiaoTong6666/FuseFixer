@@ -15,11 +15,13 @@ import fusefixer.StatusBroadcastReceiver;
 public class Entry implements IXposedHookLoadPackage {
     private static final String APP_PACKAGE = "io.github.xiaotong6666.fusefixer";
     private static final String ACTION_GET_STATUS = APP_PACKAGE + ".GET_STATUS";
+    private static final String PACKAGE_MEDIA = "com.android.providers.media.module";
+    private static final String PACKAGE_MEDIA_GOOGLE = "com.google.android.providers.media.module";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam loadPackageParam) {
-        if ("com.android.providers.media.module".equals(loadPackageParam.packageName)
-                || "com.google.android.providers.media.module".equals(loadPackageParam.packageName)) {
+        if (PACKAGE_MEDIA.equals(loadPackageParam.packageName)
+                || PACKAGE_MEDIA_GOOGLE.equals(loadPackageParam.packageName)) {
             System.loadLibrary("fusefixer");
             Log.d("LSPosedFuseFixer", "injected");
             new Handler(Looper.getMainLooper()).post(new MainThreadTask(0, this));

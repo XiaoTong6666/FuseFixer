@@ -68,12 +68,12 @@ class MainActivity : ComponentActivity() {
             try {
                 Thread.sleep(2000L)
                 Runtime.getRuntime().gc()
-                Log.d("LSPosedFuseFixer", "polling ref ...")
-                Log.d("LSPosedFuseFixer", "polled = ${referenceQueue.remove()}")
+                Log.d("FuseFixer", "polling ref ...")
+                Log.d("FuseFixer", "polled = ${referenceQueue.remove()}")
                 activity.statusBinderReference = null
                 activity.runOnUiThread(MainThreadTask(1, activity))
             } catch (_: InterruptedException) {
-                Log.d("LSPosedFuseFixer", "return")
+                Log.d("FuseFixer", "return")
             }
         }
 
@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
                     .getDeclaredMethod("getBoolean", String::class.java, Boolean::class.javaPrimitiveType)
                     .invoke(null, name, false) as Boolean
             } catch (th: Throwable) {
-                Log.e("LSPosedFuseFixer", "getProp", th)
+                Log.e("FuseFixer", "getProp", th)
                 false
             }
         }
@@ -180,7 +180,7 @@ class MainActivity : ComponentActivity() {
             ?.map { it.trim().lowercase() }
             ?.filter { it.isNotEmpty() }
             ?: listOf("stat", "access", "list", "open")
-        Log.d("LSPosedFuseFixer", "runDebugProbe path=$pathText actions=$actions")
+        Log.d("FuseFixer", "runDebugProbe path=$pathText actions=$actions")
         outputText = ""
         actions.forEach { action ->
             when (action) {
@@ -246,12 +246,14 @@ class MainActivity : ComponentActivity() {
         intent.putExtra("EXTRA_PENDING_INTENT", PendingIntent.getBroadcast(this, 1, intent, 67108864))
         intent.extras?.putBinder("EXTRA_BINDER", binder)
 
-        intent.setPackage("com.google.android.providers.media.module")
-        Log.d("LSPosedFuseFixer", "send GET_STATUS to ${intent.`package`}")
-        sendBroadcast(intent)
-        intent.setPackage("com.android.providers.media.module")
-        Log.d("LSPosedFuseFixer", "send GET_STATUS to ${intent.`package`}")
-        sendBroadcast(intent)
+        listOf(
+            "com.google.android.providers.media.module",
+            "com.android.providers.media.module",
+        ).forEach { packageName ->
+            intent.setPackage(packageName)
+            Log.d("FuseFixer", "send GET_STATUS to ${intent.`package`}")
+            sendBroadcast(intent)
+        }
 
         statusCheckThread = Thread { onStatusBinderReleased(this, referenceQueue) }.also { it.start() }
     }
@@ -259,12 +261,13 @@ class MainActivity : ComponentActivity() {
     fun updateStatusText() {
         statusCheckInFlight = false
         statusCheckThread = null
-        Log.d("LSPosedFuseFixer", "updateStatusText hookedPackage=$hookedPackage hookCheckCompleted=$hookCheckCompleted pid=$hookedPid")
+        Log.d("FuseFixer", "updateStatusText hookedPackage=$hookedPackage hookCheckCompleted=$hookCheckCompleted pid=$hookedPid")
         statusText = when {
             hookedPackage != null -> "Module status: hooked $hookedPackage pid=$hookedPid\n"
             hookCheckCompleted -> "Module status: not hooked (touch to recheck)\n"
             else -> "Module status: checking ...\n"
         }
+        logUiText(statusText)
     }
 
     private fun runPathCheck(mode: Int) {
@@ -291,7 +294,7 @@ class MainActivity : ComponentActivity() {
                     try {
                         Os.close(fd)
                     } catch (th: Throwable) {
-                        Log.e("LSPosedFuseFixer", "could not close??", th)
+                        Log.e("FuseFixer", "could not close??", th)
                     }
                     appendOutput("Open $displayPath -> OK\n")
                 }
@@ -324,6 +327,14 @@ class MainActivity : ComponentActivity() {
 
     private fun appendOutput(text: String) {
         outputText += text
+        logUiText(text)
+    }
+
+    private fun logUiText(text: String) {
+        text.lineSequence()
+            .map { it.trimEnd() }
+            .filter { it.isNotEmpty() }
+            .forEach { Log.i("FuseFixer", it) }
     }
 
     private fun defaultPath(): String = "/storage/emulated/${Process.myUid() / 100000}/Android/\\u200ddata"

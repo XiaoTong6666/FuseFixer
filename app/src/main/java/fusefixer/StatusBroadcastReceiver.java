@@ -1,12 +1,10 @@
 package fusefixer;
 
-import android.app.Application;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
-import android.os.Bundle;
 import android.os.Process;
 import android.util.Log;
 import io.github.xiaotong6666.fusefixer.MainActivity;
@@ -15,7 +13,8 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
     private static final String APP_PACKAGE = "io.github.xiaotong6666.fusefixer";
     private static final String ACTION_GET_STATUS = APP_PACKAGE + ".GET_STATUS";
     private static final String ACTION_SET_STATUS = APP_PACKAGE + ".SET_STATUS";
-
+    private static final String PACKAGE_MEDIA = "com.android.providers.media.module";
+    private static final String PACKAGE_MEDIA_GOOGLE = "com.google.android.providers.media.module";
     private final int mode;
     private final ContextWrapper owner;
 
@@ -34,7 +33,6 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
     }
 
     private void handleGetStatus(Intent intent) {
-        Application application = (Application) owner;
         try {
             Log.d("LSPosedFuseFixer", "recv " + intent);
             PendingIntent pendingIntent = intent.getParcelableExtra("EXTRA_PENDING_INTENT");
@@ -48,17 +46,14 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
             }
 
             Intent statusIntent = new Intent(ACTION_SET_STATUS).setPackage(APP_PACKAGE);
-            statusIntent.putExtra(
-                    "EXTRA_PENDING_INTENT", PendingIntent.getBroadcast(application, 1, statusIntent, 67108864));
+            statusIntent.putExtra("EXTRA_PENDING_INTENT", PendingIntent.getBroadcast(owner, 1, statusIntent, 67108864));
             statusIntent.putExtra("EXTRA_PID", Process.myPid());
-            Bundle extras = intent.getExtras();
-            if (extras != null) {
-                Bundle outExtras = statusIntent.getExtras();
-                if (outExtras != null) {
-                    outExtras.putBinder("EXTRA_BINDER", extras.getBinder("EXTRA_BINDER"));
-                }
+            if (statusIntent.getExtras() != null) {
+                statusIntent
+                        .getExtras()
+                        .putBinder("EXTRA_BINDER", statusIntent.getExtras().getBinder("EXTRA_BINDER"));
             }
-            application.sendBroadcast(statusIntent);
+            owner.sendBroadcast(statusIntent);
         } catch (Throwable th) {
             Log.e("FuseFixer", "send: ", th);
         }
@@ -74,17 +69,11 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
                 return;
             }
             String creatorPackage = pendingIntent.getCreatorPackage();
-            if (!"com.android.providers.media.module".equals(creatorPackage)
-                    && !"com.google.android.providers.media.module".equals(creatorPackage)) {
-                Log.e("LSPosedFuseFixer", "status invalid creator " + creatorPackage);
-                return;
+            if (PACKAGE_MEDIA.equals(creatorPackage) || PACKAGE_MEDIA_GOOGLE.equals(creatorPackage)) {
+                mainActivity.onHookStatusReceived(creatorPackage, intent.getIntExtra("EXTRA_PID", -1));
             }
-            Log.d(
-                    "LSPosedFuseFixer",
-                    "status accepted from " + creatorPackage + " pid=" + intent.getIntExtra("EXTRA_PID", -1));
-            mainActivity.onHookStatusReceived(creatorPackage, intent.getIntExtra("EXTRA_PID", -1));
         } catch (Throwable th) {
-            Log.e("LSPosedFuseFixer", "send: ", th);
+            Log.e("FuseFixer", "send: ", th);
         }
     }
 }
