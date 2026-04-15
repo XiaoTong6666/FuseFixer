@@ -116,6 +116,7 @@ class MainActivity : ComponentActivity() {
     private var infoText by mutableStateOf("")
     private var statusText by mutableStateOf("Module status: checking ...\n")
     private var pathText by mutableStateOf(defaultPath())
+    private var pathText2 by mutableStateOf("")
     private var outputText by mutableStateOf("")
 
     private var hookedPackage: String? = null
@@ -134,7 +135,6 @@ class MainActivity : ComponentActivity() {
         statusReceiver = StatusBroadcastReceiver(this, 1)
         val filter = IntentFilter(ACTION_SET_STATUS)
         if (Build.VERSION.SDK_INT >= 33) {
-            // 2 == RECEIVER_EXPORTED
             registerReceiver(statusReceiver, filter, 2)
         } else {
             registerReceiver(statusReceiver, filter)
@@ -147,14 +147,22 @@ class MainActivity : ComponentActivity() {
                         infoText = infoText,
                         statusText = statusText,
                         pathText = pathText,
+                        pathText2 = pathText2,
                         outputText = outputText,
                         onStatusClick = ::startStatusCheck,
                         onPathChanged = { pathText = it },
+                        onPath2Changed = { pathText2 = it },
                         onStatClick = { runPathCheck(0) },
                         onAccessClick = { runPathCheck(1) },
                         onListClick = { runPathCheck(2) },
                         onOpenClick = { runPathCheck(3) },
                         onGetConClick = { runPathCheck(4) },
+                        onCreateClick = { runPathCheck(5) },
+                        onMkdirClick = { runPathCheck(6) },
+                        onMoveClick = { runPathCheck(7) },
+                        onRmdirClick = { runPathCheck(8) },
+                        onUnlinkClick = { runPathCheck(9) },
+                        onAllPkgClick = ::runAllPkgCheck,
                         onInsertZwjClick = ::insertZwj,
                         onClearClick = { outputText = "" },
                         onResetClick = { pathText = defaultPath() },
@@ -298,14 +306,99 @@ class MainActivity : ComponentActivity() {
                     }
                     appendOutput("Open $displayPath -> OK\n")
                 }
-                else -> {
+                4 -> {
                     val selinuxContext = String(Os.getxattr(rawPath, "security.selinux"), StandardCharsets.UTF_8)
                     appendOutput("GetCon $displayPath -> OK\n$selinuxContext\n")
+                }
+                5 -> {
+                    try {
+                        File(rawPath).createNewFile()
+                        appendOutput("Create $displayPath -> OK\n")
+                    } catch (e: Exception) {
+                        appendOutput("Create $displayPath -> ${e.message}\n")
+                    }
+                }
+                6 -> {
+                    try {
+                        File(rawPath).mkdirs()
+                        appendOutput("Mkdir $displayPath -> OK\n")
+                    } catch (e: Exception) {
+                        appendOutput("Mkdir $displayPath -> ${e.message}\n")
+                    }
+                }
+                7 -> {
+                    val rawPath2 = unescapeUnicodeLiterals(pathText2) ?: return
+                    val displayPath2 = escapeNonAscii(rawPath2)
+                    try {
+                        if (File(rawPath).renameTo(File(rawPath2))) {
+                            appendOutput("Move $displayPath -> $displayPath2 -> OK\n")
+                        } else {
+                            appendOutput("Move $displayPath -> $displayPath2 -> Failed\n")
+                        }
+                    } catch (e: Exception) {
+                        appendOutput("Move $displayPath -> $displayPath2 -> ${e.message}\n")
+                    }
+                }
+                8 -> {
+                    val res = Utils.rmdir(rawPath)
+                    if (res == 0) {
+                        appendOutput("Rmdir $displayPath -> OK\n")
+                    } else {
+                        appendOutput("Rmdir $displayPath -> ${OsConstants.errnoName(res)}\n")
+                    }
+                }
+                // Use Utils for native rmdir/unlink
+                9 -> {
+                    val res = Utils.unlink(rawPath)
+                    if (res == 0) {
+                        appendOutput("Unlink $displayPath -> OK\n")
+                    } else {
+                        appendOutput("Unlink $displayPath -> ${OsConstants.errnoName(res)}\n")
+                    }
                 }
             }
         } catch (errno: ErrnoException) {
             appendOutput("${modeLabel(mode)} $displayPath -> ${OsConstants.errnoName(errno.errno)}\n")
         }
+    }
+
+    private fun runAllPkgCheck() {
+        outputText = "Scanning all packages... (this may take a while)\n"
+        Thread {
+            val sb = StringBuilder()
+            try {
+                val pkgs = packageManager.getInstalledApplications(0)
+                if (pkgs.size <= 1) {
+                    sb.append("Could not get app list, please grant app list permission\n")
+                } else {
+                    val appDataPath = unescapeUnicodeLiterals(pathText) ?: ""
+                    if (appDataPath.isEmpty()) {
+                        sb.append("Please enter a base path first\n")
+                    } else {
+                        val base = if (appDataPath.endsWith("/")) appDataPath else "$appDataPath/"
+                        sb.append("Using base path: ${escapeNonAscii(base)}\n")
+                        var existCount = 0
+                        val existPkgs = StringBuilder()
+                        pkgs.forEach { pkg ->
+                            try {
+                                Os.stat(base + pkg.packageName)
+                                existCount++
+                                existPkgs.append(pkg.packageName).append("\n")
+                            } catch (e: ErrnoException) {
+                                // ignore
+                            }
+                        }
+                        sb.append("Detected $existCount/${pkgs.size} packages\n")
+                        sb.append(existPkgs)
+                    }
+                }
+            } catch (t: Throwable) {
+                sb.append("Error: ${t.message}\n")
+            }
+            runOnUiThread {
+                appendOutput(sb.toString())
+            }
+        }.start()
     }
 
     private fun insertZwj() {
@@ -344,7 +437,13 @@ class MainActivity : ComponentActivity() {
         1 -> "Access"
         2 -> "List"
         3 -> "Open"
-        else -> "GetCon"
+        4 -> "GetCon"
+        5 -> "Create"
+        6 -> "Mkdir"
+        7 -> "Move"
+        8 -> "Rmdir"
+        9 -> "Unlink"
+        else -> "Unknown"
     }
 
     override fun onDestroy() {
@@ -359,14 +458,22 @@ private fun fuseFixerScreen(
     infoText: String,
     statusText: String,
     pathText: String,
+    pathText2: String,
     outputText: String,
     onStatusClick: () -> Unit,
     onPathChanged: (String) -> Unit,
+    onPath2Changed: (String) -> Unit,
     onStatClick: () -> Unit,
     onAccessClick: () -> Unit,
     onListClick: () -> Unit,
     onOpenClick: () -> Unit,
     onGetConClick: () -> Unit,
+    onCreateClick: () -> Unit,
+    onMkdirClick: () -> Unit,
+    onMoveClick: () -> Unit,
+    onRmdirClick: () -> Unit,
+    onUnlinkClick: () -> Unit,
+    onAllPkgClick: () -> Unit,
     onInsertZwjClick: () -> Unit,
     onClearClick: () -> Unit,
     onResetClick: () -> Unit,
@@ -392,12 +499,25 @@ private fun fuseFixerScreen(
             label = { Text("Path") },
             singleLine = false,
         )
+        OutlinedTextField(
+            value = pathText2,
+            onValueChange = onPath2Changed,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Path 2 (for Move)") },
+            singleLine = false,
+        )
         actionRows(
             onStatClick,
             onAccessClick,
             onListClick,
             onOpenClick,
             onGetConClick,
+            onCreateClick,
+            onMkdirClick,
+            onMoveClick,
+            onRmdirClick,
+            onUnlinkClick,
+            onAllPkgClick,
             onInsertZwjClick,
             onClearClick,
             onResetClick,
@@ -415,6 +535,12 @@ private fun actionRows(
     onListClick: () -> Unit,
     onOpenClick: () -> Unit,
     onGetConClick: () -> Unit,
+    onCreateClick: () -> Unit,
+    onMkdirClick: () -> Unit,
+    onMoveClick: () -> Unit,
+    onRmdirClick: () -> Unit,
+    onUnlinkClick: () -> Unit,
+    onAllPkgClick: () -> Unit,
     onInsertZwjClick: () -> Unit,
     onClearClick: () -> Unit,
     onResetClick: () -> Unit,
@@ -432,13 +558,23 @@ private fun actionRows(
     actionRow(
         listOf(
             "Get Con" to onGetConClick,
-            "Insert ZWJ" to onInsertZwjClick,
-            "Clear" to onClearClick,
-            "Reset" to onResetClick,
+            "Create" to onCreateClick,
+            "Mkdir" to onMkdirClick,
+            "Move" to onMoveClick,
         ),
     )
     actionRow(
         listOf(
+            "Rmdir" to onRmdirClick,
+            "Unlink" to onUnlinkClick,
+            "All PKG" to onAllPkgClick,
+            "Insert ZWJ" to onInsertZwjClick,
+        ),
+    )
+    actionRow(
+        listOf(
+            "Clear" to onClearClick,
+            "Reset" to onResetClick,
             "Copy All" to onCopyAllClick,
             "Self Data" to onSelfDataClick,
         ),

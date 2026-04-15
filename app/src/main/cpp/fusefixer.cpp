@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <elf.h>
 #include <link.h>
+#include <jni.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,6 +31,29 @@ extern "C" {
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+
+// FUSE structures for debug hooks
+struct fuse_session {};
+struct fuse_req {
+    struct fuse_session* se;
+    uint64_t unique;
+};
+typedef struct fuse_req* fuse_req_t;
+
+struct fuse_entry_param {
+    uint64_t ino;
+    uint64_t generation;
+    struct stat attr;
+    double attr_timeout;
+    double entry_timeout;
+    uint64_t backing_action;
+    uint64_t backing_fd;
+    uint64_t bpf_action;
+    uint64_t bpf_fd;
+};
+
+struct fuse_entry_out;
+struct fuse_entry_bpf_out;
 
 namespace {
 
@@ -718,6 +742,90 @@ final_compare:
             (rhsIdx < rhsLen) ? static_cast<uint8_t>(FoldAscii(rhsData[rhsIdx])) : 0;
         return static_cast<int>(lhsByte) - static_cast<int>(rhsByte);
     }
+}
+
+// Debug hooks for FUSE daemon
+void* gOriginalPfLookup = nullptr;
+void* gOriginalPfLookupPostfilter = nullptr;
+void* gOriginalNotifyInvalEntry = nullptr;
+void* gOriginalNotifyInvalInode = nullptr;
+void* gOriginalReplyEntry = nullptr;
+void* gOriginalReplyBuf = nullptr;
+void* gOriginalReplyErr = nullptr;
+std::string (*gNodeBuildPathPtr)(void* node) = nullptr;
+
+std::string InodePath(uint64_t ino) {
+    if (ino == 1)
+        return "(ROOT)";
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "(%p)", (void*)ino);
+    if (gNodeBuildPathPtr) {
+        return std::string(buf) + gNodeBuildPathPtr(reinterpret_cast<void*>(ino));
+    }
+    return std::string(buf);
+}
+
+extern "C" void WrappedPfLookup(fuse_req_t req, uint64_t parent, const char* name) {
+    __android_log_print(3, kLogTag, "lookup: req=%lu parent=%s name=%s", (unsigned long)req->unique,
+                        InodePath(parent).c_str(), name ? DebugPreview(name).c_str() : "null");
+
+    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*)>(gOriginalPfLookup);
+    if (fn)
+        fn(req, parent, name);
+}
+
+extern "C" void WrappedPfLookupPostfilter(fuse_req_t req, uint64_t parent, uint32_t error_in,
+                                          const char* name, struct fuse_entry_out* feo,
+                                          struct fuse_entry_bpf_out* febo) {
+    __android_log_print(3, kLogTag, "pf_lookup_postfilter req=%p parent=%s name=%s", req,
+                        InodePath(parent).c_str(), name ? DebugPreview(name).c_str() : "null");
+    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, uint32_t, const char*,
+                                        struct fuse_entry_out*, struct fuse_entry_bpf_out*)>(
+        gOriginalPfLookupPostfilter);
+    if (fn)
+        fn(req, parent, error_in, name, feo, febo);
+}
+
+extern "C" int WrappedNotifyInvalEntry(void* se, uint64_t parent, const char* name,
+                                       size_t namelen) {
+    auto fn =
+        reinterpret_cast<int (*)(void*, uint64_t, const char*, size_t)>(gOriginalNotifyInvalEntry);
+    int ret = fn ? fn(se, parent, name, namelen) : -1;
+    __android_log_print(3, kLogTag, "notify_inval_entry: ino=0x%lx name=%s ret=%d",
+                        (unsigned long)parent, name ? DebugPreview(name).c_str() : "null", ret);
+    return ret;
+}
+
+extern "C" int WrappedNotifyInvalInode(void* se, uint64_t ino, off_t off, off_t len) {
+    auto fn = reinterpret_cast<int (*)(void*, uint64_t, off_t, off_t)>(gOriginalNotifyInvalInode);
+    int ret = fn ? fn(se, ino, off, len) : -1;
+    __android_log_print(3, kLogTag, "notify_inval_inode: ino=0x%lx name=%s ret=%d",
+                        (unsigned long)ino, InodePath(ino).c_str(), ret);
+    return ret;
+}
+
+extern "C" int WrappedReplyEntry(fuse_req_t req, const struct fuse_entry_param* e) {
+    auto fn =
+        reinterpret_cast<int (*)(fuse_req_t, const struct fuse_entry_param*)>(gOriginalReplyEntry);
+    int ret = fn ? fn(req, e) : -1;
+    __android_log_print(3, kLogTag, "fuse_reply_entry: req=%lu ino=%s ret=%d",
+                        (unsigned long)req->unique, InodePath(e->ino).c_str(), ret);
+    return ret;
+}
+
+extern "C" int WrappedReplyBuf(fuse_req_t req, const char* buf, size_t size) {
+    auto fn = reinterpret_cast<int (*)(fuse_req_t, const char*, size_t)>(gOriginalReplyBuf);
+    int ret = fn ? fn(req, buf, size) : -1;
+    __android_log_print(3, kLogTag, "fuse_reply_buf: req=%lu size=%zu ret=%d",
+                        (unsigned long)req->unique, size, ret);
+    return ret;
+}
+
+extern "C" int WrappedReplyErr(fuse_req_t req, int err) {
+    auto fn = reinterpret_cast<int (*)(fuse_req_t, int)>(gOriginalReplyErr);
+    int ret = fn ? fn(req, err) : -1;
+    __android_log_print(3, kLogTag, "fuse_reply_err: req=%p err=%d ret=%d", req, err, ret);
+    return ret;
 }
 
 // Path hook wrappers
@@ -1957,7 +2065,8 @@ void InstallCompareHook(const ElfInfo& elfInfo, std::string_view symbolName,
         const auto flushEnd = reinterpret_cast<void*>((slotAddr + elfInfo.pageSizeRaw) & pageMask);
         FlushCodeRange(const_cast<void*>(pageStart), flushEnd);
 
-        // Original does NOT restore mprotect permissions
+        // Restore original memory permissions
+        mprotect(const_cast<void*>(pageStart), elfInfo.pageSizeRaw, PROT_READ);
     }
 }
 
@@ -2178,6 +2287,76 @@ void InstallFuseHooks() {
                         reinterpret_cast<void*>(gOriginalIsBpfBackingPath), gOriginalStrcasecmp,
                         gOriginalEqualsIgnoreCase, reinterpret_cast<void*>(gUHasBinaryProperty));
 
+    // Debug hooks installation
+    if (useRuntimeElf) {
+        auto runtimeDyn = ParseRuntimeDynamicInfo(*module);
+        if (runtimeDyn) {
+            auto installRuntimeDebugHook = [&](const char* sym, void* hook, void** backup,
+                                               const char* label) {
+                auto idx = FindRuntimeSymbolIndex(
+                    *runtimeDyn, reinterpret_cast<const uint8_t*>(sym), std::strlen(sym));
+                if (idx) {
+                    auto slots =
+                        FindRuntimeRelocationSlotsForSymbol(*runtimeDyn, *idx, module->base);
+                    for (auto slotAddr : slots) {
+                        auto* slot = reinterpret_cast<void**>(slotAddr);
+                        mprotect(reinterpret_cast<void*>(slotAddr & ~(getpagesize() - 1)),
+                                 getpagesize(), PROT_READ | PROT_WRITE);
+                        if (backup)
+                            *backup = *slot;
+                        *slot = hook;
+                        __android_log_print(3, kLogTag, "patched debug %s slot=%p", label,
+                                            (void*)slotAddr);
+                        mprotect(reinterpret_cast<void*>(slotAddr & ~(getpagesize() - 1)),
+                                 getpagesize(), PROT_READ);
+                    }
+                }
+            };
+
+            installRuntimeDebugHook("fuse_lowlevel_notify_inval_entry",
+                                    (void*)WrappedNotifyInvalEntry, &gOriginalNotifyInvalEntry,
+                                    "notify_inval_entry");
+            installRuntimeDebugHook("fuse_lowlevel_notify_inval_inode",
+                                    (void*)WrappedNotifyInvalInode, &gOriginalNotifyInvalInode,
+                                    "notify_inval_inode");
+            installRuntimeDebugHook("fuse_reply_entry", (void*)WrappedReplyEntry,
+                                    &gOriginalReplyEntry, "reply_entry");
+            installRuntimeDebugHook("fuse_reply_buf", (void*)WrappedReplyBuf, &gOriginalReplyBuf,
+                                    "reply_buf");
+            installRuntimeDebugHook("fuse_reply_err", (void*)WrappedReplyErr, &gOriginalReplyErr,
+                                    "reply_err");
+        }
+    } else {
+        auto mapped = MapReadOnlyFile(module->path);
+        if (mapped && ParseDynamicInfo(*mapped)) {
+            // Similar logic for non-runtime ELF if needed, but let's focus on the most common case.
+        }
+    }
+
+    // Inline debug hooks
+    auto resolveAndHook = [&](std::string_view sym, void* hook, void** backup, const char* label) {
+        auto target = useRuntimeElf ? ResolveTargetSymbolRuntime(*module, sym)
+                                    : ResolveTargetSymbol(*module, sym);
+        if (target) {
+            gHookInstaller(*target, hook, backup);
+            __android_log_print(4, kLogTag, "inline debug hook ok %s", label);
+        }
+    };
+
+    resolveAndHook("_ZN13mediaprovider4fuseL9pf_lookupEP8fuse_reqmPKc", (void*)WrappedPfLookup,
+                   &gOriginalPfLookup, "pf_lookup");
+    resolveAndHook(
+        "_ZN13mediaprovider4fuseL20pf_lookup_postfilterEP8fuse_reqmjPKcP14fuse_entry_outP18fuse_"
+        "entry_bpf_out",
+        (void*)WrappedPfLookupPostfilter, &gOriginalPfLookupPostfilter, "pf_lookup_postfilter");
+
+    gNodeBuildPathPtr = (std::string(*)(void*))(
+        useRuntimeElf
+            ? ResolveTargetSymbolRuntime(*module, "_ZNK13mediaprovider4fuse4node9BuildPathEv")
+                  .value_or(nullptr)
+            : ResolveTargetSymbol(*module, "_ZNK13mediaprovider4fuse4node9BuildPathEv")
+                  .value_or(nullptr));
+
     // Compare hooks (relocation/GOT patching)
 
     // Need to build ELF info for compare hook installer
@@ -2233,6 +2412,7 @@ void InstallFuseHooks() {
                                     reinterpret_cast<void*>(slotAddr),
                                     backup != nullptr ? *backup : nullptr, replacement);
                 FlushCodeRange(pageStart, reinterpret_cast<void*>((slotAddr + ps) & pageMask));
+                mprotect(pageStart, ps, PROT_READ);
             }
         };
 
@@ -2287,7 +2467,39 @@ extern "C" void PostNativeInit(const char* loadedLibrary, void*) {
     InstallFuseHooks();
 }
 
-}  // namespace
+}  // end of namespace
+
+extern "C" {
+
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_rmdir(JNIEnv* env, jclass clazz,
+                                                                         jstring path) {
+    (void)clazz;
+    const char* c_path = env->GetStringUTFChars(path, nullptr);
+
+    jint ret = rmdir(c_path);
+    if (ret != 0)
+        ret = errno;
+    else
+        ret = 0;
+    env->ReleaseStringUTFChars(path, c_path);
+    return ret;
+}
+
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_unlink(JNIEnv* env, jclass clazz,
+                                                                          jstring path) {
+    (void)clazz;
+    const char* c_path = env->GetStringUTFChars(path, nullptr);
+
+    jint ret = unlink(c_path);
+    if (ret != 0)
+        ret = errno;
+    else
+        ret = 0;
+    env->ReleaseStringUTFChars(path, c_path);
+    return ret;
+}
+
+}  // extern "C"
 
 extern "C" __attribute__((visibility("default"))) void* native_init(void* api) {
     __android_log_print(4, kLogTag, "Loaded");
