@@ -1,5 +1,6 @@
 #include <android/log.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <elf.h>
 #include <link.h>
 #include <jni.h>
@@ -159,6 +160,7 @@ using IsAppAccessiblePathFn = bool (*)(void* fuse, const std::string& path, uint
 using IsPackageOwnedPathFn = bool (*)(const std::string& lhs, const std::string& rhs);
 using IsBpfBackingPathFn = bool (*)(const std::string& path);
 using ShouldNotCacheFn = bool (*)(void* fuse, const std::string& path);
+using FuseReplyErrFn = int (*)(fuse_req_t, int);
 using DirectoryEntries = std::vector<std::shared_ptr<mediaprovider::fuse::DirectoryEntry>>;
 using GetDirectoryEntriesFn = DirectoryEntries (*)(void* wrapper, uint32_t uid,
                                                    const std::string& path, DIR* dirp);
@@ -167,6 +169,14 @@ using GetDirectoryEntriesFn = DirectoryEntries (*)(void* wrapper, uint32_t uid,
 // InstallMinimalDebugHooks() and InstallAdvancedDebugHooks() use them only as a fallback when the
 // safer imported-symbol path is missing or the device build routes execution through internal
 // functions that are not exposed by name.
+// Reverse-engineered record: is_app_accessible_path @ 0x0017bb5c.
+constexpr uintptr_t kDeviceIsAppAccessiblePathOffset = 0x0017bb5c;
+// Reverse-engineered record: pf_lookup @ 0x00175e48.
+constexpr uintptr_t kDevicePfLookupOffset = 0x00175e48;
+// Reverse-engineered record: pf_lookup_postfilter @ 0x00175f90.
+constexpr uintptr_t kDevicePfLookupPostfilterOffset = 0x00175f90;
+// Reverse-engineered record: pf_getattr @ 0x001762bc.
+constexpr uintptr_t kDevicePfGetattrOffset = 0x001762bc;
 // Reverse-engineered record: ShouldNotCache @ 0x0017dc64.
 constexpr uintptr_t kDeviceShouldNotCacheOffset = 0x0017dc64;
 // Reverse-engineered record: MediaProviderWrapper::GetDirectoryEntries @ 0x0018a3ec.
@@ -365,6 +375,7 @@ std::atomic<int> gPackageOwnedLogCount{0};
 std::atomic<int> gBpfBackingLogCount{0};
 std::atomic<int> gStrcasecmpLogCount{0};
 std::atomic<int> gEqualsIgnoreCaseLogCount{0};
+std::atomic<int> gReplyErrFallbackLogCount{0};
 std::atomic<int> gSuspiciousDirectLogCount{0};
 std::mutex gUidHideCacheMutex;
 std::unordered_map<uint32_t, bool> gUidHideCache;
@@ -1027,6 +1038,35 @@ thread_local uint64_t gCurrentLookupParentInode = 0;
 thread_local bool gTrackRootHiddenLookup = false;
 thread_local bool gTrackHiddenSubtreeLookup = false;
 thread_local bool gZeroAttrCacheForCurrentGetattr = false;
+
+void LogReplyErrFallbackFailure(const char* caller) {
+    if (ShouldLogLimited(gReplyErrFallbackLogCount, 8)) {
+        __android_log_print(6, kLogTag,
+                            "%s could not resolve fuse_reply_err; delegating to the original path",
+                            caller);
+    }
+}
+
+FuseReplyErrFn ResolveReplyErrFunction() {
+    auto replyErr = reinterpret_cast<FuseReplyErrFn>(gOriginalReplyErr);
+    if (replyErr != nullptr) {
+        return replyErr;
+    }
+
+    static std::atomic<void*> sResolvedReplyErr{nullptr};
+    void* cached = sResolvedReplyErr.load(std::memory_order_acquire);
+    if (cached != nullptr) {
+        return reinterpret_cast<FuseReplyErrFn>(cached);
+    }
+
+    void* resolved = dlsym(RTLD_DEFAULT, "fuse_reply_err");
+    if (resolved == nullptr) {
+        return nullptr;
+    }
+
+    sResolvedReplyErr.store(resolved, std::memory_order_release);
+    return reinterpret_cast<FuseReplyErrFn>(resolved);
+}
 std::mutex gHiddenSubtreeInodesMutex;
 std::unordered_set<uint64_t> gHiddenSubtreeInodes;
 
@@ -1147,11 +1187,13 @@ bool ReplyHiddenNamedTargetError(fuse_req_t req, const char* opName, HiddenNamed
     const int err = kind == HiddenNamedTargetKind::Root ? rootErr : descendantErr;
     DebugLogPrint(4, "%s hide named target err=%d root=%d", opName, err,
                   kind == HiddenNamedTargetKind::Root ? 1 : 0);
-    auto replyErr = reinterpret_cast<int (*)(fuse_req_t, int)>(gOriginalReplyErr);
+    auto replyErr = ResolveReplyErrFunction();
     if (replyErr != nullptr) {
         replyErr(req, err);
+        return true;
     }
-    return true;
+    LogReplyErrFallbackFailure(opName);
+    return false;
 }
 
 // Device reverse engineering shows make_node_entry() and create_handle_for_node() both consult
@@ -1491,11 +1533,12 @@ extern "C" void WrappedPfLookupPostfilter(fuse_req_t req, uint64_t parent, uint3
         DebugLogPrint(4, "pf_lookup_postfilter hide uid=%u parent=%s name=%s",
                       static_cast<unsigned>(uid), InodePath(parent).c_str(), name);
         ScheduleHiddenEntryInvalidation();
-        auto replyErr = reinterpret_cast<int (*)(fuse_req_t, int)>(gOriginalReplyErr);
+        auto replyErr = ResolveReplyErrFunction();
         if (replyErr != nullptr) {
             replyErr(req, ENOENT);
+            return;
         }
-        return;
+        LogReplyErrFallbackFailure("pf_lookup_postfilter");
     }
     auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, uint32_t, const char*,
                                         struct fuse_entry_out*, struct fuse_entry_bpf_out*)>(
@@ -1564,6 +1607,9 @@ extern "C" void WrappedPfMknod(fuse_req_t req, uint64_t parent, const char* name
     }
 }
 
+// AOSP pf_unlink only gates on parent_path before it deletes the final child path, so hidden leaf
+// names must return ENOENT here instead of reaching the lower filesystem.
+// https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1218
 extern "C" void WrappedPfUnlink(fuse_req_t req, uint64_t parent, const char* name) {
     RememberFuseSession(req);
     const HiddenNamedTargetKind kind = ClassifyHiddenNamedTarget(ReqUid(req), parent, name);
@@ -1576,6 +1622,9 @@ extern "C" void WrappedPfUnlink(fuse_req_t req, uint64_t parent, const char* nam
     }
 }
 
+// AOSP pf_rmdir follows the same parent-only validation pattern as pf_unlink, so hidden child
+// names must be rejected before the real directory delete runs.
+// https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1248
 extern "C" void WrappedPfRmdir(fuse_req_t req, uint64_t parent, const char* name) {
     RememberFuseSession(req);
     const HiddenNamedTargetKind kind = ClassifyHiddenNamedTarget(ReqUid(req), parent, name);
@@ -1607,11 +1656,12 @@ extern "C" void WrappedPfRename(fuse_req_t req, uint64_t parent, const char* nam
                       dstKind == HiddenNamedTargetKind::Root ? 1 : 0,
                       dstKind == HiddenNamedTargetKind::Descendant ? 1 : 0, flags);
         ScheduleHiddenEntryInvalidation();
-        auto replyErr = reinterpret_cast<int (*)(fuse_req_t, int)>(gOriginalReplyErr);
+        auto replyErr = ResolveReplyErrFunction();
         if (replyErr != nullptr) {
             replyErr(req, ENOENT);
+            return;
         }
-        return;
+        LogReplyErrFallbackFailure("pf_rename");
     }
     auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*, uint64_t, const char*,
                                         uint32_t)>(gOriginalPfRename);
@@ -1719,14 +1769,18 @@ extern "C" int WrappedReplyEntry(fuse_req_t req, const struct fuse_entry_param* 
     const bool hiddenLookupForUid =
         IsTestHiddenUid(ReqUid(req)) && (gTrackRootHiddenLookup || gTrackHiddenSubtreeLookup);
     if (hiddenLookupForUid) {
-        auto replyErr = reinterpret_cast<int (*)(fuse_req_t, int)>(gOriginalReplyErr);
+        auto replyErr = ResolveReplyErrFunction();
         const int ret = replyErr ? replyErr(req, ENOENT) : -1;
-        DebugLogPrint(4, "hide lookup entry uid=%u req=%lu ino=%s root=%d child=%d ret=%d",
-                      static_cast<unsigned>(ReqUid(req)), req ? (unsigned long)req->unique : 0UL,
-                      e != nullptr ? InodePath(e->ino).c_str() : "(null)",
-                      gTrackRootHiddenLookup ? 1 : 0, gTrackHiddenSubtreeLookup ? 1 : 0, ret);
-        ScheduleHiddenEntryInvalidation();
-        return ret;
+        if (replyErr != nullptr) {
+            DebugLogPrint(4, "hide lookup entry uid=%u req=%lu ino=%s root=%d child=%d ret=%d",
+                          static_cast<unsigned>(ReqUid(req)),
+                          req ? (unsigned long)req->unique : 0UL,
+                          e != nullptr ? InodePath(e->ino).c_str() : "(null)",
+                          gTrackRootHiddenLookup ? 1 : 0, gTrackHiddenSubtreeLookup ? 1 : 0, ret);
+            ScheduleHiddenEntryInvalidation();
+            return ret;
+        }
+        LogReplyErrFallbackFailure("fuse_reply_entry");
     }
     fuse_entry_param patchedEntry = {};
     const struct fuse_entry_param* replyEntry = e;
@@ -3668,7 +3722,17 @@ void InstallMinimalCoreHooks(const ModuleInfo& module, const FileElfContext& fil
                                    reinterpret_cast<void*>(+WrappedEqualsIgnoreCaseAbi),
                                    &gOriginalEqualsIgnoreCase, "EqualsIgnoreCase");
 
+    if (gOriginalIsAppAccessiblePath == nullptr) {
+        // Reverse-engineered record: is_app_accessible_path @ 0x0017bb5c.
+        TryInstallInlineHookAt(
+            reinterpret_cast<void*>(module.base + kDeviceIsAppAccessiblePathOffset),
+            reinterpret_cast<void*>(+WrappedIsAppAccessiblePath),
+            reinterpret_cast<void**>(&gOriginalIsAppAccessiblePath),
+            "hook is_app_accessible_path failed");
+    }
+
     if (gOriginalShouldNotCache == nullptr) {
+        // Reverse-engineered record: ShouldNotCache @ 0x0017dc64.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDeviceShouldNotCacheOffset),
                                (void*)WrappedShouldNotCache, &gOriginalShouldNotCache,
                                "hook ShouldNotCache failed");
@@ -3707,6 +3771,7 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
     InstallFileCompareHookIfNeeded(fileContext.elfInfo, "__open_2", "__open_2", (void*)WrappedOpen2,
                                    &gOriginalOpen2, "__open_2");
     if (gOriginalGetDirectoryEntries == nullptr) {
+        // Reverse-engineered record: MediaProviderWrapper::GetDirectoryEntries @ 0x0018a3ec.
         // This wrapper is a C++ member function and is not always reachable through imported symbol
         // tables on the device build, so keep the direct RVA fallback.
         TryInstallInlineHookAt(
@@ -3715,37 +3780,44 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
             "hook GetDirectoryEntries failed");
     }
     if (gOriginalPfMkdir == nullptr) {
+        // Reverse-engineered record: pf_mkdir @ 0x00177050.
         // mkdir policy lives in an internal static handler, so keep the device-specific offset as a
         // backup when symbol-based lookup is unavailable.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfMkdirOffset),
                                (void*)WrappedPfMkdir, &gOriginalPfMkdir, "hook pf_mkdir failed");
     }
     if (gOriginalPfMknod == nullptr) {
+        // Reverse-engineered record: pf_mknod @ 0x00176ba8.
         // Some create paths go through pf_mknod instead of pf_create on device builds.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfMknodOffset),
                                (void*)WrappedPfMknod, &gOriginalPfMknod, "hook pf_mknod failed");
     }
     if (gOriginalPfUnlink == nullptr) {
+        // Reverse-engineered record: pf_unlink @ 0x00177534.
         // unlink/rmdir/create handlers are internal statics in libfuse_jni, so retain the verified
         // offset fallback for devices that do not expose stable symbols.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfUnlinkOffset),
                                (void*)WrappedPfUnlink, &gOriginalPfUnlink, "hook pf_unlink failed");
     }
     if (gOriginalPfRmdir == nullptr) {
+        // Reverse-engineered record: pf_rmdir @ 0x00177920.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfRmdirOffset),
                                (void*)WrappedPfRmdir, &gOriginalPfRmdir, "hook pf_rmdir failed");
     }
     if (gOriginalPfRename == nullptr) {
+        // Reverse-engineered record: pf_rename @ 0x00177ef4.
         // rename follows the same parent-only access pattern as create/delete handlers, so keep an
         // explicit device RVA fallback for builds that do not expose the local symbol.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfRenameOffset),
                                (void*)WrappedPfRename, &gOriginalPfRename, "hook pf_rename failed");
     }
     if (gOriginalPfCreate == nullptr) {
+        // Reverse-engineered record: pf_create @ 0x0017a7c8.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfCreateOffset),
                                (void*)WrappedPfCreate, &gOriginalPfCreate, "hook pf_create failed");
     }
     if (gOriginalPfReaddir == nullptr) {
+        // Reverse-engineered record: pf_readdir @ 0x00179c40.
         // Directory enumeration behavior varies across device builds, so keep direct RVA hooks for
         // readdir, readdirplus, and readdir_postfilter in addition to the reply_buf fallback.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfReaddirOffset),
@@ -3753,11 +3825,13 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
                                "hook pf_readdir failed");
     }
     if (gOriginalPfReaddirplus == nullptr) {
+        // Reverse-engineered record: pf_readdirplus @ 0x0017b320.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfReaddirplusOffset),
                                (void*)WrappedPfReaddirplus, &gOriginalPfReaddirplus,
                                "hook pf_readdirplus failed");
     }
     if (gOriginalPfReaddirPostfilter == nullptr) {
+        // Reverse-engineered record: pf_readdir_postfilter @ 0x00179cac.
         TryInstallInlineHookAt(
             reinterpret_cast<void*>(module.base + kDevicePfReaddirPostfilterOffset),
             (void*)WrappedPfReaddirPostfilter, &gOriginalPfReaddirPostfilter,
@@ -3820,6 +3894,24 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
             module, "_ZN13mediaprovider4fuseL10pf_getattrEP8fuse_reqmP14fuse_file_info",
             (void*)WrappedPfGetattr, &gOriginalPfGetattr, "hook pf_getattr failed");
     }
+    if (gOriginalPfLookup == nullptr) {
+        // Reverse-engineered record: pf_lookup @ 0x00175e48.
+        TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfLookupOffset),
+                               (void*)WrappedPfLookup, &gOriginalPfLookup, "hook pf_lookup failed");
+    }
+    if (gOriginalPfLookupPostfilter == nullptr) {
+        // Reverse-engineered record: pf_lookup_postfilter @ 0x00175f90.
+        TryInstallInlineHookAt(
+            reinterpret_cast<void*>(module.base + kDevicePfLookupPostfilterOffset),
+            (void*)WrappedPfLookupPostfilter, &gOriginalPfLookupPostfilter,
+            "hook pf_lookup_postfilter failed");
+    }
+    if (gOriginalPfGetattr == nullptr) {
+        // Reverse-engineered record: pf_getattr @ 0x001762bc.
+        TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfGetattrOffset),
+                               (void*)WrappedPfGetattr, &gOriginalPfGetattr,
+                               "hook pf_getattr failed");
+    }
 }
 
 // When file-backed symbol lookup is unavailable, fall back to runtime relocation patching and
@@ -3879,7 +3971,17 @@ void InstallAdvancedCoreHooks(const ModuleInfo& module, CoreHookStatus* status) 
         }
     }
 
+    if (gOriginalIsAppAccessiblePath == nullptr) {
+        // Reverse-engineered record: is_app_accessible_path @ 0x0017bb5c.
+        TryInstallInlineHookAt(
+            reinterpret_cast<void*>(module.base + kDeviceIsAppAccessiblePathOffset),
+            reinterpret_cast<void*>(+WrappedIsAppAccessiblePath),
+            reinterpret_cast<void**>(&gOriginalIsAppAccessiblePath),
+            "hook is_app_accessible_path failed");
+    }
+
     if (gOriginalShouldNotCache == nullptr) {
+        // Reverse-engineered record: ShouldNotCache @ 0x0017dc64.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDeviceShouldNotCacheOffset),
                                (void*)WrappedShouldNotCache, &gOriginalShouldNotCache,
                                "hook ShouldNotCache failed");
@@ -3935,6 +4037,7 @@ void InstallAdvancedDebugHooks(const ModuleInfo& module) {
     }
 
     if (gOriginalGetDirectoryEntries == nullptr) {
+        // Reverse-engineered record: MediaProviderWrapper::GetDirectoryEntries @ 0x0018a3ec.
         // Keep the RVA fallback even after runtime relocation patching because this member function
         // is not guaranteed to participate in imported relocation slots.
         TryInstallInlineHookAt(
@@ -3943,32 +4046,39 @@ void InstallAdvancedDebugHooks(const ModuleInfo& module) {
             "hook GetDirectoryEntries failed");
     }
     if (gOriginalPfMkdir == nullptr) {
+        // Reverse-engineered record: pf_mkdir @ 0x00177050.
         // The advanced path still keeps explicit handler RVAs because these static functions may be
         // absent from runtime relocation metadata.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfMkdirOffset),
                                (void*)WrappedPfMkdir, &gOriginalPfMkdir, "hook pf_mkdir failed");
     }
     if (gOriginalPfMknod == nullptr) {
+        // Reverse-engineered record: pf_mknod @ 0x00176ba8.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfMknodOffset),
                                (void*)WrappedPfMknod, &gOriginalPfMknod, "hook pf_mknod failed");
     }
     if (gOriginalPfUnlink == nullptr) {
+        // Reverse-engineered record: pf_unlink @ 0x00177534.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfUnlinkOffset),
                                (void*)WrappedPfUnlink, &gOriginalPfUnlink, "hook pf_unlink failed");
     }
     if (gOriginalPfRmdir == nullptr) {
+        // Reverse-engineered record: pf_rmdir @ 0x00177920.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfRmdirOffset),
                                (void*)WrappedPfRmdir, &gOriginalPfRmdir, "hook pf_rmdir failed");
     }
     if (gOriginalPfRename == nullptr) {
+        // Reverse-engineered record: pf_rename @ 0x00177ef4.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfRenameOffset),
                                (void*)WrappedPfRename, &gOriginalPfRename, "hook pf_rename failed");
     }
     if (gOriginalPfCreate == nullptr) {
+        // Reverse-engineered record: pf_create @ 0x0017a7c8.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfCreateOffset),
                                (void*)WrappedPfCreate, &gOriginalPfCreate, "hook pf_create failed");
     }
     if (gOriginalPfReaddir == nullptr) {
+        // Reverse-engineered record: pf_readdir @ 0x00179c40.
         // These three offsets correspond to the internal enumeration handlers we validated in the
         // reverse-engineered device binary.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfReaddirOffset),
@@ -3976,11 +4086,13 @@ void InstallAdvancedDebugHooks(const ModuleInfo& module) {
                                "hook pf_readdir failed");
     }
     if (gOriginalPfReaddirplus == nullptr) {
+        // Reverse-engineered record: pf_readdirplus @ 0x0017b320.
         TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfReaddirplusOffset),
                                (void*)WrappedPfReaddirplus, &gOriginalPfReaddirplus,
                                "hook pf_readdirplus failed");
     }
     if (gOriginalPfReaddirPostfilter == nullptr) {
+        // Reverse-engineered record: pf_readdir_postfilter @ 0x00179cac.
         TryInstallInlineHookAt(
             reinterpret_cast<void*>(module.base + kDevicePfReaddirPostfilterOffset),
             (void*)WrappedPfReaddirPostfilter, &gOriginalPfReaddirPostfilter,
@@ -4040,6 +4152,24 @@ void InstallAdvancedDebugHooks(const ModuleInfo& module) {
         InstallHookForSymbol("_ZN13mediaprovider4fuseL10pf_getattrEP8fuse_reqmP14fuse_file_info",
                              (void*)WrappedPfGetattr, &gOriginalPfGetattr,
                              "hook pf_getattr failed");
+    }
+    if (gOriginalPfLookup == nullptr) {
+        // Reverse-engineered record: pf_lookup @ 0x00175e48.
+        TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfLookupOffset),
+                               (void*)WrappedPfLookup, &gOriginalPfLookup, "hook pf_lookup failed");
+    }
+    if (gOriginalPfLookupPostfilter == nullptr) {
+        // Reverse-engineered record: pf_lookup_postfilter @ 0x00175f90.
+        TryInstallInlineHookAt(
+            reinterpret_cast<void*>(module.base + kDevicePfLookupPostfilterOffset),
+            (void*)WrappedPfLookupPostfilter, &gOriginalPfLookupPostfilter,
+            "hook pf_lookup_postfilter failed");
+    }
+    if (gOriginalPfGetattr == nullptr) {
+        // Reverse-engineered record: pf_getattr @ 0x001762bc.
+        TryInstallInlineHookAt(reinterpret_cast<void*>(module.base + kDevicePfGetattrOffset),
+                               (void*)WrappedPfGetattr, &gOriginalPfGetattr,
+                               "hook pf_getattr failed");
     }
 }
 
