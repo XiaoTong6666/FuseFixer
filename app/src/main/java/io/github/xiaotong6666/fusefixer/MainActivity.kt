@@ -190,7 +190,7 @@ class MainActivity : ComponentActivity() {
         pathText = debugPath
         val debugActions = intent.getStringExtra(EXTRA_DEBUG_ACTIONS)
         Log.d("FuseFixer", "handleDebugIntent path=$debugPath actions=$debugActions")
-        appendOutput("ADB debug intent path=${escapeNonAscii(debugPath)} actions=${debugActions ?: "(default)"}\n")
+        appendOutput("ADB debug intent path=${PathDebugText.escapeNonAscii(debugPath)} actions=${debugActions ?: "(default)"}\n")
         window.decorView.postDelayed({ runDebugProbe() }, 1500L)
     }
 
@@ -202,7 +202,7 @@ class MainActivity : ComponentActivity() {
             ?: listOf("stat", "access", "list", "open")
         Log.d("FuseFixer", "runDebugProbe path=$pathText actions=$actions")
         outputText = ""
-        appendOutput("Running debug probe path=${escapeNonAscii(pathText)} actions=${actions.joinToString(",")}\n")
+        appendOutput("Running debug probe path=${PathDebugText.escapeNonAscii(pathText)} actions=${actions.joinToString(",")}\n")
         actions.forEach { action ->
             when (action) {
                 "stat" -> runPathCheck(0)
@@ -297,8 +297,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun runPathCheck(mode: Int) {
-        val rawPath = unescapeUnicodeLiterals(pathText) ?: return
-        val displayPath = escapeNonAscii(rawPath)
+        val rawPath = PathDebugText.unescapeUnicodeLiterals(pathText) ?: return
+        val displayPath = PathDebugText.escapeNonAscii(rawPath)
         try {
             when (mode) {
                 0 -> appendOutput("Stat $displayPath -> OK\n${StructStatFormatter.format(Os.stat(rawPath))}\n")
@@ -345,12 +345,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 7 -> {
-                    val rawPath2 = unescapeUnicodeLiterals(pathText2) ?: return
+                    val rawPath2 = PathDebugText.unescapeUnicodeLiterals(pathText2) ?: return
                     if (rawPath2.isEmpty()) {
                         appendOutput("Rename(Move) requires Path 2\n")
                         return
                     }
-                    val displayPath2 = escapeNonAscii(rawPath2)
+                    val displayPath2 = PathDebugText.escapeNonAscii(rawPath2)
                     val res = Utils.rename(rawPath, rawPath2)
                     if (res == 0) {
                         appendOutput("Rename(Move) $displayPath -> $displayPath2 -> OK\n")
@@ -390,12 +390,12 @@ class MainActivity : ComponentActivity() {
                 if (pkgs.size <= 1) {
                     sb.append("Could not get app list, please grant app list permission\n")
                 } else {
-                    val appDataPath = unescapeUnicodeLiterals(pathText) ?: ""
+                    val appDataPath = PathDebugText.unescapeUnicodeLiterals(pathText) ?: ""
                     if (appDataPath.isEmpty()) {
                         sb.append("Please enter a base path first\n")
                     } else {
                         val base = if (appDataPath.endsWith("/")) appDataPath else "$appDataPath/"
-                        sb.append("Using base path: ${escapeNonAscii(base)}\n")
+                        sb.append("Using base path: ${PathDebugText.escapeNonAscii(base)}\n")
                         var existCount = 0
                         val existPkgs = StringBuilder()
                         pkgs.forEach { pkg ->

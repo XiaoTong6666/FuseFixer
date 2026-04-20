@@ -3,10 +3,6 @@ package fusefixer;
 import android.system.StructStat;
 
 public abstract class StructStatFormatter {
-    public static boolean objectsEqual(Object obj, Object obj2) {
-        return obj == null ? obj2 == null : obj.equals(obj2);
-    }
-
     public static String format(StructStat structStat) {
         StringBuilder sb = new StringBuilder();
         int type = structStat.st_mode & 61440;
