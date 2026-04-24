@@ -254,7 +254,7 @@ adb logcat -s FuseHide
 ## 许可证
 
 - `app/src/main/cpp/third_party/xz-embedded/*` 来自 xz-embedded，文件头声明 `SPDX-License-Identifier: 0BSD`。
-- 本仓库整体采用 MIT License，详见 `LICENSE`。
+- 本仓库整体采用 Apache License 2.0，详见 [LICENSE](LICENSE)。
 
 ## 致谢
 
