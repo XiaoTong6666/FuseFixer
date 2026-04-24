@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">Die Laufzeit-Konfiguration zum Ausblenden anpassen und prüfen, welche Konfiguration MediaProvider tatsächlich verwendet.</string>
     <string name="home_subtitle_probe">Direkte Pfadprüfungen für den eingehakten MediaProvider-Prozess ausführen.</string>
     <string name="tab_policy">Konfiguration</string>

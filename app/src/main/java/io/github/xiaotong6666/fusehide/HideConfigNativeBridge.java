@@ -1,8 +1,8 @@
-package io.github.xiaotong6666.fusefixer;
+package io.github.xiaotong6666.fusehide;
 
 public final class HideConfigNativeBridge {
     static {
-        System.loadLibrary("fusefixer");
+        System.loadLibrary("fusehide");
     }
 
     private HideConfigNativeBridge() {}

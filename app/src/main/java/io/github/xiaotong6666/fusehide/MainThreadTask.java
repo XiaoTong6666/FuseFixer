@@ -1,7 +1,4 @@
-package fusefixer;
-
-import io.github.xiaotong6666.fusefixer.Entry;
-import io.github.xiaotong6666.fusefixer.MainActivity;
+package io.github.xiaotong6666.fusehide;
 
 public final class MainThreadTask implements Runnable {
     private final int taskKind;

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">Ajustez la configuration de masquage à l’exécution et vérifiez la configuration réellement utilisée par MediaProvider.</string>
     <string name="home_subtitle_probe">Exécutez des vérifications de chemin direct sur le processus MediaProvider accroché.</string>
     <string name="tab_policy">Configuration</string>

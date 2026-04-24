@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "io.github.xiaotong6666.fusefixer"
+    namespace = "io.github.xiaotong6666.fusehide"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "io.github.xiaotong6666.fusefixer"
+        applicationId = "io.github.xiaotong6666.fusehide"
         minSdk = 31
         targetSdk = 37
         

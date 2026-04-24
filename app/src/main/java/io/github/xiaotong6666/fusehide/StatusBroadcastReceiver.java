@@ -1,4 +1,4 @@
-package fusefixer;
+package io.github.xiaotong6666.fusehide;
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -7,10 +7,9 @@ import android.content.ContextWrapper;
 import android.content.Intent;
 import android.os.Process;
 import android.util.Log;
-import io.github.xiaotong6666.fusefixer.MainActivity;
 
 public final class StatusBroadcastReceiver extends BroadcastReceiver {
-    private static final String APP_PACKAGE = "io.github.xiaotong6666.fusefixer";
+    private static final String APP_PACKAGE = "io.github.xiaotong6666.fusehide";
     private static final String ACTION_GET_STATUS = APP_PACKAGE + ".GET_STATUS";
     private static final String ACTION_SET_STATUS = APP_PACKAGE + ".SET_STATUS";
     private static final String PACKAGE_MEDIA = "com.android.providers.media.module";
@@ -34,14 +33,14 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
 
     private void handleGetStatus(Intent intent) {
         try {
-            Log.d("FuseFixer", "recv " + intent);
+            Log.d("FuseHide", "recv " + intent);
             PendingIntent pendingIntent = intent.getParcelableExtra("EXTRA_PENDING_INTENT");
             if (pendingIntent == null) {
-                Log.e("FuseFixer", "no pendingintent?");
+                Log.e("FuseHide", "no pendingintent?");
                 return;
             }
             if (!APP_PACKAGE.equals(pendingIntent.getCreatorPackage())) {
-                Log.e("FuseFixer", "invalid pkg " + pendingIntent.getCreatorPackage());
+                Log.e("FuseHide", "invalid pkg " + pendingIntent.getCreatorPackage());
                 return;
             }
 
@@ -55,17 +54,17 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
             }
             owner.sendBroadcast(statusIntent);
         } catch (Throwable th) {
-            Log.e("FuseFixer", "send: ", th);
+            Log.e("FuseHide", "send: ", th);
         }
     }
 
     private void handleSetStatus(Intent intent) {
         MainActivity mainActivity = (MainActivity) owner;
         try {
-            Log.d("FuseFixer", "recv status " + intent);
+            Log.d("FuseHide", "recv status " + intent);
             PendingIntent pendingIntent = intent.getParcelableExtra("EXTRA_PENDING_INTENT");
             if (pendingIntent == null) {
-                Log.e("FuseFixer", "status pendingintent missing");
+                Log.e("FuseHide", "status pendingintent missing");
                 return;
             }
             String creatorPackage = pendingIntent.getCreatorPackage();
@@ -73,7 +72,7 @@ public final class StatusBroadcastReceiver extends BroadcastReceiver {
                 mainActivity.onHookStatusReceived(creatorPackage, intent.getIntExtra("EXTRA_PID", -1));
             }
         } catch (Throwable th) {
-            Log.e("FuseFixer", "send: ", th);
+            Log.e("FuseHide", "send: ", th);
         }
     }
 }

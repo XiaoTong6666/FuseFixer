@@ -2,7 +2,7 @@
 
 #include "state.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 extern "C" bool WrappedShouldNotCache(void* fuse, const std::string& path);
 void WrappedAddDirectoryEntriesFromLowerFs(DIR* dirp, LowerFsDirentFilterFn filter,
@@ -55,4 +55,4 @@ extern "C" bool WrappedEqualsIgnoreCaseAbi(const char* lhsData, size_t lhsSize, 
 
 void InstallFuseHooks();
 
-}  // namespace fusefixer
+}  // namespace fusehide

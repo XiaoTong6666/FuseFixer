@@ -1,4 +1,4 @@
-package io.github.xiaotong6666.fusefixer;
+package io.github.xiaotong6666.fusehide;
 
 import android.app.AndroidAppHelper;
 import android.app.Application;
@@ -16,11 +16,9 @@ import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
-import fusefixer.MainThreadTask;
-import fusefixer.StatusBroadcastReceiver;
 
 public class Entry implements IXposedHookLoadPackage {
-    private static final String APP_PACKAGE = "io.github.xiaotong6666.fusefixer";
+    private static final String APP_PACKAGE = "io.github.xiaotong6666.fusehide";
     private static final String ACTION_GET_STATUS = APP_PACKAGE + ".GET_STATUS";
     private static final String PACKAGE_MEDIA = "com.android.providers.media.module";
     private static final String PACKAGE_MEDIA_GOOGLE = "com.google.android.providers.media.module";
@@ -86,7 +84,7 @@ public class Entry implements IXposedHookLoadPackage {
             }
             sendConfigStatus(application, requestedToken, applied, message);
             Log.d(
-                    "FuseFixer",
+                    "FuseHide",
                     "config reload source=" + source + " applied=" + applied + " tokenMatches=" + tokenMatches);
         } finally {
             pendingResult.finish();
@@ -99,10 +97,10 @@ public class Entry implements IXposedHookLoadPackage {
             configLoadCompleted = true;
             pendingConfigRetryCount = 0;
             getMainHandler().removeCallbacks(configRetryRunnable);
-            Log.d("FuseFixer", "config reload source=" + source + " applied=true");
+            Log.d("FuseHide", "config reload source=" + source + " applied=true");
             return;
         }
-        Log.d("FuseFixer", "config reload source=" + source + " applied=false");
+        Log.d("FuseHide", "config reload source=" + source + " applied=false");
         scheduleConfigRetry(source);
     }
 
@@ -111,14 +109,14 @@ public class Entry implements IXposedHookLoadPackage {
             return;
         }
         if (pendingConfigRetryCount >= CONFIG_MAX_RETRIES) {
-            Log.w("FuseFixer", "config retry exhausted source=" + source);
+            Log.w("FuseHide", "config retry exhausted source=" + source);
             return;
         }
         pendingConfigRetryCount += 1;
         getMainHandler().removeCallbacks(configRetryRunnable);
         getMainHandler().postDelayed(configRetryRunnable, CONFIG_RETRY_DELAY_MS);
         Log.d(
-                "FuseFixer",
+                "FuseHide",
                 "scheduled config retry source="
                         + source
                         + " attempt="
@@ -141,8 +139,8 @@ public class Entry implements IXposedHookLoadPackage {
         try {
             if (PACKAGE_MEDIA.equals(loadPackageParam.packageName)
                     || PACKAGE_MEDIA_GOOGLE.equals(loadPackageParam.packageName)) {
-                System.loadLibrary("fusefixer");
-                Log.d("FuseFixer", "injected");
+                System.loadLibrary("fusehide");
+                Log.d("FuseHide", "injected");
                 if ((loadPackageParam.appInfo.flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
                     try {
                         XposedHelpers.findAndHookMethod(
@@ -155,7 +153,7 @@ public class Entry implements IXposedHookLoadPackage {
                                     @Override
                                     protected void afterHookedMethod(MethodHookParam param) {
                                         Log.d(
-                                                "FuseFixer",
+                                                "FuseHide",
                                                 "isUidAllowedAccessToDataOrObbPathForFuse uid="
                                                         + param.args[0]
                                                         + " path="
@@ -165,13 +163,13 @@ public class Entry implements IXposedHookLoadPackage {
                                     }
                                 });
                     } catch (Throwable th) {
-                        Log.e("FuseFixer", "hook isUidAllowedAccessToDataOrObbPathForFuse", th);
+                        Log.e("FuseHide", "hook isUidAllowedAccessToDataOrObbPathForFuse", th);
                     }
                 }
                 new Handler(Looper.getMainLooper()).post(new MainThreadTask(0, this));
             }
         } catch (Throwable th) {
-            Log.e("FuseFixer", "handleLoadPackage", th);
+            Log.e("FuseHide", "handleLoadPackage", th);
         }
     }
 
@@ -179,7 +177,7 @@ public class Entry implements IXposedHookLoadPackage {
         try {
             Application application = AndroidAppHelper.currentApplication();
             if (application == null) {
-                Log.e("FuseFixer", "app is null??");
+                Log.e("FuseHide", "app is null??");
                 return;
             }
             hookedApplication = application;
@@ -227,7 +225,7 @@ public class Entry implements IXposedHookLoadPackage {
                             .putExtra(HideConfigStore.EXTRA_QUERY_TOKEN, queryToken)
                             .putExtras(HideConfigStore.toBundle(config));
                     application.sendBroadcast(reply);
-                    Log.d("FuseFixer", "reported applied hide config queryToken=" + queryToken);
+                    Log.d("FuseHide", "reported applied hide config queryToken=" + queryToken);
                 }
             };
             IntentFilter queryFilter = new IntentFilter(HideConfigStore.ACTION_GET_APPLIED_HIDE_CONFIG);
@@ -247,7 +245,7 @@ public class Entry implements IXposedHookLoadPackage {
                     }
                     pendingConfigRetryCount = 0;
                     getMainHandler().removeCallbacks(configRetryRunnable);
-                    Log.d("FuseFixer", "system config trigger action=" + action);
+                    Log.d("FuseHide", "system config trigger action=" + action);
                     startConfigReload(action);
                 }
             };
@@ -263,9 +261,9 @@ public class Entry implements IXposedHookLoadPackage {
             }
 
             startConfigReload("initial");
-            Log.d("FuseFixer", "registered");
+            Log.d("FuseHide", "registered");
         } catch (Throwable th) {
-            Log.e("FuseFixer", "register", th);
+            Log.e("FuseHide", "register", th);
         }
     }
 }

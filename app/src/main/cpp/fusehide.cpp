@@ -1,6 +1,6 @@
-#include "fusefixer/state.hpp"
+#include "fusehide/state.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 UHasBinaryPropertyFn gUHasBinaryProperty = u_hasBinaryProperty;
 HookInstaller gHookInstaller = nullptr;
@@ -212,4 +212,4 @@ std::optional<bool> ResolveShouldHideUidWithPackageManager(uint32_t uid) {
     return finish(shouldHide);
 }
 
-}  // namespace fusefixer
+}  // namespace fusehide

@@ -22,10 +22,10 @@
 
 # LSPosed/Xposed entry points are referenced from assets/xposed_init and runtime callbacks,
 # so R8 must not rename or remove them in release builds.
--keep class io.github.xiaotong6666.fusefixer.Entry { *; }
--keepnames class io.github.xiaotong6666.fusefixer.Entry
+-keep class io.github.xiaotong6666.fusehide.Entry { *; }
+-keepnames class io.github.xiaotong6666.fusehide.Entry
 -keep class * implements de.robv.android.xposed.IXposedHookLoadPackage { *; }
 
 # These are reached from the module entry and receiver registration path.
--keep class fusefixer.StatusBroadcastReceiver { *; }
--keep class fusefixer.MainThreadTask { *; }
+-keep class io.github.xiaotong6666.fusehide.StatusBroadcastReceiver { *; }
+-keep class io.github.xiaotong6666.fusehide.MainThreadTask { *; }

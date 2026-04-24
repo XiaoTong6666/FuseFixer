@@ -2,10 +2,10 @@
 
 extern "C" void PostNativeInit(const char* loadedLibrary, void*) {
     if (loadedLibrary == nullptr ||
-        std::strstr(loadedLibrary, fusefixer::kTargetLibrary) == nullptr) {
+        std::strstr(loadedLibrary, fusehide::kTargetLibrary) == nullptr) {
         return;
     }
-    fusefixer::InstallFuseHooks();
+    fusehide::InstallFuseHooks();
 }
 
 std::vector<std::string> JStringArrayToVector(JNIEnv* env, jobjectArray values) {
@@ -46,87 +46,86 @@ jobjectArray VectorToJavaStringArray(JNIEnv* env, const std::vector<std::string>
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
-    fusefixer::gJavaVm = vm;
+    fusehide::gJavaVm = vm;
     return JNI_VERSION_1_6;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getDefaultEnableHideAllRootEntries(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getDefaultEnableHideAllRootEntries(
     JNIEnv*, jclass) {
-    return fusefixer::DefaultHideConfig().enableHideAllRootEntries ? JNI_TRUE : JNI_FALSE;
+    return fusehide::DefaultHideConfig().enableHideAllRootEntries ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getDefaultHideAllRootEntriesExemptions(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getDefaultHideAllRootEntriesExemptions(
     JNIEnv* env, jclass) {
-    return VectorToJavaStringArray(env,
-                                   fusefixer::DefaultHideConfig().hideAllRootEntriesExemptions);
+    return VectorToJavaStringArray(env, fusehide::DefaultHideConfig().hideAllRootEntriesExemptions);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getDefaultHiddenRootEntryNames(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getDefaultHiddenRootEntryNames(
     JNIEnv* env, jclass) {
-    return VectorToJavaStringArray(env, fusefixer::DefaultHideConfig().hiddenRootEntryNames);
+    return VectorToJavaStringArray(env, fusehide::DefaultHideConfig().hiddenRootEntryNames);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getDefaultHiddenRelativePaths(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getDefaultHiddenRelativePaths(
     JNIEnv* env, jclass) {
-    return VectorToJavaStringArray(env, fusefixer::DefaultHideConfig().hiddenRelativePaths);
+    return VectorToJavaStringArray(env, fusehide::DefaultHideConfig().hiddenRelativePaths);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getDefaultHiddenPackages(JNIEnv* env,
-                                                                                      jclass) {
-    return VectorToJavaStringArray(env, fusefixer::DefaultHideConfig().hiddenPackages);
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getDefaultHiddenPackages(JNIEnv* env,
+                                                                                     jclass) {
+    return VectorToJavaStringArray(env, fusehide::DefaultHideConfig().hiddenPackages);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getCurrentEnableHideAllRootEntries(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getCurrentEnableHideAllRootEntries(
     JNIEnv*, jclass) {
-    return fusefixer::CurrentHideConfig()->enableHideAllRootEntries ? JNI_TRUE : JNI_FALSE;
+    return fusehide::CurrentHideConfig()->enableHideAllRootEntries ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getCurrentHideAllRootEntriesExemptions(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getCurrentHideAllRootEntriesExemptions(
     JNIEnv* env, jclass) {
     return VectorToJavaStringArray(env,
-                                   fusefixer::CurrentHideConfig()->hideAllRootEntriesExemptions);
+                                   fusehide::CurrentHideConfig()->hideAllRootEntriesExemptions);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getCurrentHiddenRootEntryNames(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getCurrentHiddenRootEntryNames(
     JNIEnv* env, jclass) {
-    return VectorToJavaStringArray(env, fusefixer::CurrentHideConfig()->hiddenRootEntryNames);
+    return VectorToJavaStringArray(env, fusehide::CurrentHideConfig()->hiddenRootEntryNames);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getCurrentHiddenRelativePaths(
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getCurrentHiddenRelativePaths(
     JNIEnv* env, jclass) {
-    return VectorToJavaStringArray(env, fusefixer::CurrentHideConfig()->hiddenRelativePaths);
+    return VectorToJavaStringArray(env, fusehide::CurrentHideConfig()->hiddenRelativePaths);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_getCurrentHiddenPackages(JNIEnv* env,
-                                                                                      jclass) {
-    return VectorToJavaStringArray(env, fusefixer::CurrentHideConfig()->hiddenPackages);
+Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_getCurrentHiddenPackages(JNIEnv* env,
+                                                                                     jclass) {
+    return VectorToJavaStringArray(env, fusehide::CurrentHideConfig()->hiddenPackages);
 }
 
-JNIEXPORT void JNICALL Java_io_github_xiaotong6666_fusefixer_HideConfigNativeBridge_applyHideConfig(
+JNIEXPORT void JNICALL Java_io_github_xiaotong6666_fusehide_HideConfigNativeBridge_applyHideConfig(
     JNIEnv* env, jclass, jboolean enableHideAllRootEntries,
     jobjectArray hideAllRootEntriesExemptions, jobjectArray hiddenRootEntryNames,
     jobjectArray hiddenRelativePaths, jobjectArray hiddenPackages) {
-    fusefixer::HideConfig config;
+    fusehide::HideConfig config;
     config.enableHideAllRootEntries = enableHideAllRootEntries == JNI_TRUE;
     config.hideAllRootEntriesExemptions = JStringArrayToVector(env, hideAllRootEntriesExemptions);
     config.hiddenRootEntryNames = JStringArrayToVector(env, hiddenRootEntryNames);
     config.hiddenRelativePaths = JStringArrayToVector(env, hiddenRelativePaths);
     config.hiddenPackages = JStringArrayToVector(env, hiddenPackages);
-    fusefixer::ApplyHideConfig(std::move(config));
+    fusehide::ApplyHideConfig(std::move(config));
 }
 
-JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_rmdir(JNIEnv* env, jclass clazz,
-                                                                         jstring path) {
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusehide_Utils_rmdir(JNIEnv* env, jclass clazz,
+                                                                        jstring path) {
     (void)clazz;
     const char* c_path = env->GetStringUTFChars(path, nullptr);
 
@@ -139,8 +138,8 @@ JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_rmdir(JNIEnv*
     return ret;
 }
 
-JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_unlink(JNIEnv* env, jclass clazz,
-                                                                          jstring path) {
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusehide_Utils_unlink(JNIEnv* env, jclass clazz,
+                                                                         jstring path) {
     (void)clazz;
     const char* c_path = env->GetStringUTFChars(path, nullptr);
 
@@ -153,8 +152,8 @@ JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_unlink(JNIEnv
     return ret;
 }
 
-JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_mkdir(JNIEnv* env, jclass clazz,
-                                                                         jstring path) {
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusehide_Utils_mkdir(JNIEnv* env, jclass clazz,
+                                                                        jstring path) {
     (void)clazz;
     const char* c_path = env->GetStringUTFChars(path, nullptr);
 
@@ -167,9 +166,9 @@ JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_mkdir(JNIEnv*
     return ret;
 }
 
-JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_rename(JNIEnv* env, jclass clazz,
-                                                                          jstring old_path,
-                                                                          jstring new_path) {
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusehide_Utils_rename(JNIEnv* env, jclass clazz,
+                                                                         jstring old_path,
+                                                                         jstring new_path) {
     (void)clazz;
     const char* c_old_path = env->GetStringUTFChars(old_path, nullptr);
     const char* c_new_path = env->GetStringUTFChars(new_path, nullptr);
@@ -184,8 +183,8 @@ JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_rename(JNIEnv
     return ret;
 }
 
-JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_create(JNIEnv* env, jclass clazz,
-                                                                          jstring path) {
+JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusehide_Utils_create(JNIEnv* env, jclass clazz,
+                                                                         jstring path) {
     (void)clazz;
     const char* c_path = env->GetStringUTFChars(path, nullptr);
 
@@ -203,10 +202,10 @@ JNIEXPORT jint JNICALL Java_io_github_xiaotong6666_fusefixer_Utils_create(JNIEnv
 }  // extern "C"
 
 extern "C" __attribute__((visibility("default"))) void* native_init(void* api) {
-    __android_log_print(4, fusefixer::kLogTag, "Loaded");
+    __android_log_print(4, fusehide::kLogTag, "Loaded");
     if (api != nullptr) {
-        fusefixer::gHookInstaller =
-            reinterpret_cast<const fusefixer::NativeApiEntries*>(api)->hookFunc;
+        fusehide::gHookInstaller =
+            reinterpret_cast<const fusehide::NativeApiEntries*>(api)->hookFunc;
     }
     return reinterpret_cast<void*>(+PostNativeInit);
 }

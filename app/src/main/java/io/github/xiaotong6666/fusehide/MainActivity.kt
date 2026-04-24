@@ -1,4 +1,4 @@
-package io.github.xiaotong6666.fusefixer
+package io.github.xiaotong6666.fusehide
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -51,10 +51,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import fusefixer.MainThreadTask
-import fusefixer.StatusBroadcastReceiver
-import fusefixer.StructStatFormatter
-import io.github.xiaotong6666.fusefixer.ui.theme.fuseFixerTheme
+import io.github.xiaotong6666.fusehide.ui.theme.fuseHideTheme
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -85,7 +82,7 @@ private data class HideConfigDiff(
 
 class MainActivity : ComponentActivity() {
     companion object {
-        private const val APP_PACKAGE = "io.github.xiaotong6666.fusefixer"
+        private const val APP_PACKAGE = "io.github.xiaotong6666.fusehide"
         private const val ACTION_GET_STATUS = "$APP_PACKAGE.GET_STATUS"
         private const val ACTION_SET_STATUS = "$APP_PACKAGE.SET_STATUS"
         private const val EXTRA_DEBUG_PATH = "debug_path"
@@ -95,12 +92,12 @@ class MainActivity : ComponentActivity() {
             try {
                 Thread.sleep(2000L)
                 Runtime.getRuntime().gc()
-                Log.d("FuseFixer", "polling ref ...")
-                Log.d("FuseFixer", "polled = ${referenceQueue.remove()}")
+                Log.d("FuseHide", "polling ref ...")
+                Log.d("FuseHide", "polled = ${referenceQueue.remove()}")
                 activity.statusBinderReference = null
                 activity.runOnUiThread(MainThreadTask(1, activity))
             } catch (_: InterruptedException) {
-                Log.d("FuseFixer", "return")
+                Log.d("FuseHide", "return")
             }
         }
 
@@ -109,7 +106,7 @@ class MainActivity : ComponentActivity() {
                 .getDeclaredMethod("getBoolean", String::class.java, Boolean::class.javaPrimitiveType)
                 .invoke(null, name, false) as Boolean
         } catch (th: Throwable) {
-            Log.e("FuseFixer", "getProp", th)
+            Log.e("FuseHide", "getProp", th)
             false
         }
     }
@@ -231,7 +228,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            fuseFixerTheme {
+            fuseHideTheme {
                 fuseFixerHomeScreen(
                     selectedTab = selectedTab,
                     onTabSelected = { selectedTab = it },
@@ -306,7 +303,7 @@ class MainActivity : ComponentActivity() {
         selectedTab = 1
         pathText = debugPath
         val debugActions = intent.getStringExtra(EXTRA_DEBUG_ACTIONS)
-        Log.d("FuseFixer", "handleDebugIntent path=$debugPath actions=$debugActions")
+        Log.d("FuseHide", "handleDebugIntent path=$debugPath actions=$debugActions")
         appendOutput("ADB debug intent path=${PathDebugText.escapeNonAscii(debugPath)} actions=${debugActions ?: "(default)"}\n")
         window.decorView.postDelayed({ runDebugProbe() }, 1500L)
     }
@@ -317,7 +314,7 @@ class MainActivity : ComponentActivity() {
             ?.map { it.trim().lowercase() }
             ?.filter { it.isNotEmpty() }
             ?: listOf("stat", "access", "list", "open")
-        Log.d("FuseFixer", "runDebugProbe path=$pathText actions=$actions")
+        Log.d("FuseHide", "runDebugProbe path=$pathText actions=$actions")
         outputText = ""
         appendOutput("Running debug probe path=${PathDebugText.escapeNonAscii(pathText)} actions=${actions.joinToString(",")}\n")
         actions.forEach { action ->
@@ -353,7 +350,7 @@ class MainActivity : ComponentActivity() {
         val utsname: StructUtsname = Os.uname()
         val sdk = if (Build.VERSION.SDK_INT < 36) Build.VERSION.SDK_INT * 100000 else Build.VERSION.SDK_INT_FULL
         buildString {
-            append("FuseFixer\n")
+            append("FuseHide\n")
             append("Kernel: ${utsname.release}\n")
             append("Release: ${Build.VERSION.RELEASE}\n")
             append("Device: ${Build.DEVICE}\n")
@@ -394,7 +391,7 @@ class MainActivity : ComponentActivity() {
             "com.android.providers.media.module",
         ).forEach { packageName ->
             intent.setPackage(packageName)
-            Log.d("FuseFixer", "send GET_STATUS to ${intent.`package`}")
+            Log.d("FuseHide", "send GET_STATUS to ${intent.`package`}")
             sendBroadcast(intent)
         }
 
@@ -404,7 +401,7 @@ class MainActivity : ComponentActivity() {
     fun updateStatusText() {
         statusCheckInFlight = false
         statusCheckThread = null
-        Log.d("FuseFixer", "updateStatusText hookedPackage=$hookedPackage hookCheckCompleted=$hookCheckCompleted pid=$hookedPid")
+        Log.d("FuseHide", "updateStatusText hookedPackage=$hookedPackage hookCheckCompleted=$hookCheckCompleted pid=$hookedPid")
         statusText = when {
             hookedPackage != null -> getString(R.string.status_hooked, hookedPackage, hookedPid) + "\n"
             hookCheckCompleted -> getString(R.string.status_not_hooked) + "\n"
@@ -440,7 +437,7 @@ class MainActivity : ComponentActivity() {
                     try {
                         Os.close(fd)
                     } catch (th: Throwable) {
-                        Log.e("FuseFixer", "could not close??", th)
+                        Log.e("FuseHide", "could not close??", th)
                     }
                     appendOutput("Open $displayPath -> OK\n")
                 }
@@ -704,7 +701,7 @@ class MainActivity : ComponentActivity() {
         text.lineSequence()
             .map { it.trimEnd() }
             .filter { it.isNotEmpty() }
-            .forEach { Log.i("FuseFixer", it) }
+            .forEach { Log.i("FuseHide", it) }
     }
 
     private fun defaultPath(): String = "/storage/emulated/0/xinhao"

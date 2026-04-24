@@ -1,4 +1,4 @@
-package io.github.xiaotong6666.fusefixer
+package io.github.xiaotong6666.fusehide
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -19,7 +19,7 @@ class HideConfigRequestReceiver : BroadcastReceiver() {
             return
         }
         if (!isTrustedCaller(context)) {
-            Log.e("FuseFixer", "reject hide config request callerUid=${Binder.getCallingUid()}")
+            Log.e("FuseHide", "reject hide config request callerUid=${Binder.getCallingUid()}")
             return
         }
 
@@ -27,7 +27,7 @@ class HideConfigRequestReceiver : BroadcastReceiver() {
         val replyPackage = intent.getStringExtra(HideConfigStore.EXTRA_REPLY_PACKAGE)
         val replyAction = intent.getStringExtra(HideConfigStore.EXTRA_REPLY_ACTION)
         if (queryToken.isNullOrEmpty() || replyPackage.isNullOrEmpty() || replyAction.isNullOrEmpty()) {
-            Log.e("FuseFixer", "hide config request missing reply metadata")
+            Log.e("FuseHide", "hide config request missing reply metadata")
             return
         }
 
@@ -42,7 +42,7 @@ class HideConfigRequestReceiver : BroadcastReceiver() {
                     .getString("reload_token", null),
             )
         context.sendBroadcast(response)
-        Log.d("FuseFixer", "served hide config request callerUid=${Binder.getCallingUid()} replyPackage=$replyPackage queryToken=$queryToken")
+        Log.d("FuseHide", "served hide config request callerUid=${Binder.getCallingUid()} replyPackage=$replyPackage queryToken=$queryToken")
     }
 
     private fun isTrustedCaller(context: Context): Boolean {

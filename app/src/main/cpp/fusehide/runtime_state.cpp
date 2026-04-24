@@ -1,6 +1,6 @@
 #include "state.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 // Hook state for libfuse_jni.so running inside the MediaProvider process.
 void* gOriginalPfLookup = nullptr;
@@ -1093,4 +1093,4 @@ void ScheduleHiddenInodeInvalidation(uint64_t ino) {
     RuntimeState::ScheduleHiddenInodeInvalidation(ino);
 }
 
-}  // namespace fusefixer
+}  // namespace fusehide

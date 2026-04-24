@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">Ajusta la configuración de ocultación en tiempo de ejecución y comprueba qué configuración está usando realmente MediaProvider.</string>
     <string name="home_subtitle_probe">Ejecuta comprobaciones directas de rutas en el proceso MediaProvider enganchado.</string>
     <string name="tab_policy">Configuración</string>

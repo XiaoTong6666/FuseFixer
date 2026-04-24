@@ -68,9 +68,9 @@ jobs:
           filename=$(basename "$file")
 
           if [[ "$filename" == *"debug"* ]]; then
-            new_name="FuseFixer_Debug_v${COUNT}.apk"
+            new_name="FuseHide_Debug_v${COUNT}.apk"
           else
-            new_name="FuseFixer_v${COUNT}.apk"
+            new_name="FuseHide_v${COUNT}.apk"
           fi
 
           mv "$file" "$dir/$new_name"
@@ -81,13 +81,13 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: app-debug
-        path: app/build/outputs/apk/debug/FuseFixer_Debug_v*.apk
+        path: app/build/outputs/apk/debug/FuseHide_Debug_v*.apk
 
     - name: Upload release APK
       uses: actions/upload-artifact@v4
       with:
         name: app-release
-        path: app/build/outputs/apk/release/FuseFixer_v*.apk
+        path: app/build/outputs/apk/release/FuseHide_v*.apk
 
     - name: Create GitHub Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -96,5 +96,5 @@ jobs:
         tag_name: v${{ steps.commit_count.outputs.count }}
         overwrite: true
         files: |
-          app/build/outputs/apk/debug/FuseFixer_Debug_v*.apk
-          app/build/outputs/apk/release/FuseFixer_v*.apk
+          app/build/outputs/apk/debug/FuseHide_Debug_v*.apk
+          app/build/outputs/apk/release/FuseHide_v*.apk

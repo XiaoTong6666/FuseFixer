@@ -1,8 +1,8 @@
-package io.github.xiaotong6666.fusefixer
+package io.github.xiaotong6666.fusehide
 
 object Utils {
     init {
-        System.loadLibrary("fusefixer")
+        System.loadLibrary("fusehide")
     }
 
     @JvmStatic

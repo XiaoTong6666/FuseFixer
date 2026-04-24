@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">Adjust the runtime hide config and verify what MediaProvider is actually using.</string>
     <string name="home_subtitle_probe">Run direct path checks against the hooked MediaProvider process.</string>
     <string name="tab_policy">Config</string>

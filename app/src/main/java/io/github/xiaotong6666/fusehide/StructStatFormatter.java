@@ -1,4 +1,4 @@
-package fusefixer;
+package io.github.xiaotong6666.fusehide;
 
 import android.system.StructStat;
 

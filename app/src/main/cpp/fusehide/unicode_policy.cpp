@@ -1,6 +1,6 @@
 #include "state.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 std::string UnicodePolicy::DebugPreview(std::string_view value, size_t limit) {
     const size_t n = value.size() < limit ? value.size() : limit;
@@ -494,4 +494,4 @@ int CompareCaseFoldIgnoringDefaultIgnorables(const uint8_t* lhsData, size_t lhsL
                                                                    rhsLen);
 }
 
-}  // namespace fusefixer
+}  // namespace fusehide

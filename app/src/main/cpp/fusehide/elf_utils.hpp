@@ -10,7 +10,7 @@ extern "C" {
 
 #include "state.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 inline constexpr std::string_view kIsAppAccessiblePathSymbols[] = {
     "_ZN13mediaprovider4fuseL22is_app_accessible_pathEP4fuseRKNSt6__ndk112basic_stringIcNS3_11char_"
@@ -292,4 +292,4 @@ std::vector<uintptr_t> FindRelocationSlotsForSymbol(const MappedFile& file, cons
 std::vector<uintptr_t> FindRuntimeRelocationSlotsForSymbol(const RuntimeDynamicInfo& info,
                                                            uint32_t symIndex, uintptr_t loadBias);
 
-}  // namespace fusefixer
+}  // namespace fusehide

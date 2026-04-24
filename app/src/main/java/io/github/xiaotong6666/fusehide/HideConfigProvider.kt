@@ -1,4 +1,4 @@
-package io.github.xiaotong6666.fusefixer
+package io.github.xiaotong6666.fusehide
 
 import android.content.ContentProvider
 import android.content.ContentValues

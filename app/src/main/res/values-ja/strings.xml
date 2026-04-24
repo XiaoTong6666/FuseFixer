@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">実行時の隠蔽設定を調整し、MediaProviderで実際に使われている設定を確認します。</string>
     <string name="home_subtitle_probe">Hook済みの MediaProvider プロセスに対して直接パス検査を実行します。</string>
     <string name="tab_policy">設定</string>

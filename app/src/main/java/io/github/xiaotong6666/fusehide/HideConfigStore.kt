@@ -1,4 +1,4 @@
-package io.github.xiaotong6666.fusefixer
+package io.github.xiaotong6666.fusehide
 
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -16,15 +16,15 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 object HideConfigStore {
-    const val APP_PACKAGE: String = "io.github.xiaotong6666.fusefixer"
+    const val APP_PACKAGE: String = "io.github.xiaotong6666.fusehide"
     const val PACKAGE_MEDIA: String = "com.android.providers.media.module"
     const val PACKAGE_MEDIA_GOOGLE: String = "com.google.android.providers.media.module"
-    const val ACTION_RELOAD_HIDE_CONFIG: String = "io.github.xiaotong6666.fusefixer.RELOAD_HIDE_CONFIG"
-    const val ACTION_SET_CONFIG_STATUS: String = "io.github.xiaotong6666.fusefixer.SET_CONFIG_STATUS"
-    const val ACTION_GET_APPLIED_HIDE_CONFIG: String = "io.github.xiaotong6666.fusefixer.GET_APPLIED_HIDE_CONFIG"
-    const val ACTION_SET_APPLIED_HIDE_CONFIG: String = "io.github.xiaotong6666.fusefixer.SET_APPLIED_HIDE_CONFIG"
-    const val ACTION_REQUEST_HIDE_CONFIG: String = "io.github.xiaotong6666.fusefixer.REQUEST_HIDE_CONFIG"
-    const val ACTION_SET_HIDE_CONFIG: String = "io.github.xiaotong6666.fusefixer.SET_HIDE_CONFIG"
+    const val ACTION_RELOAD_HIDE_CONFIG: String = "io.github.xiaotong6666.fusehide.RELOAD_HIDE_CONFIG"
+    const val ACTION_SET_CONFIG_STATUS: String = "io.github.xiaotong6666.fusehide.SET_CONFIG_STATUS"
+    const val ACTION_GET_APPLIED_HIDE_CONFIG: String = "io.github.xiaotong6666.fusehide.GET_APPLIED_HIDE_CONFIG"
+    const val ACTION_SET_APPLIED_HIDE_CONFIG: String = "io.github.xiaotong6666.fusehide.SET_APPLIED_HIDE_CONFIG"
+    const val ACTION_REQUEST_HIDE_CONFIG: String = "io.github.xiaotong6666.fusehide.REQUEST_HIDE_CONFIG"
+    const val ACTION_SET_HIDE_CONFIG: String = "io.github.xiaotong6666.fusehide.SET_HIDE_CONFIG"
     const val EXTRA_RELOAD_TOKEN: String = "reload_token"
     const val EXTRA_RELOAD_APPLIED: String = "reload_applied"
     const val EXTRA_RELOAD_MESSAGE: String = "reload_message"
@@ -33,7 +33,7 @@ object HideConfigStore {
     const val EXTRA_REPLY_ACTION: String = "reply_action"
     private const val PREFS_NAME = "hide_config"
     private const val METHOD_GET_HIDE_CONFIG = "get_hide_config"
-    private const val AUTHORITY = "io.github.xiaotong6666.fusefixer.hideconfig"
+    private const val AUTHORITY = "io.github.xiaotong6666.fusehide.hideconfig"
     private const val KEY_ENABLE_HIDE_ALL_ROOT_ENTRIES = "enable_hide_all_root_entries"
     private const val KEY_HIDE_ALL_ROOT_ENTRIES_EXEMPTIONS = "hide_all_root_entries_exemptions"
     private const val KEY_HIDDEN_ROOT_ENTRY_NAMES = "hidden_root_entry_names"
@@ -135,7 +135,7 @@ object HideConfigStore {
     fun loadViaProviderBundle(context: Context): Bundle? = try {
         context.contentResolver.call(providerUri, METHOD_GET_HIDE_CONFIG, null, null)
     } catch (t: Throwable) {
-        Log.e("FuseFixer", "loadViaProvider", t)
+        Log.e("FuseHide", "loadViaProvider", t)
         null
     }
 
@@ -158,7 +158,7 @@ object HideConfigStore {
             )
             true
         } catch (t: Throwable) {
-            Log.e("FuseFixer", "applyBundleToNative", t)
+            Log.e("FuseHide", "applyBundleToNative", t)
             false
         }
     }
@@ -212,7 +212,7 @@ object HideConfigStore {
                 .putExtra(EXTRA_REPLY_PACKAGE, appContext.packageName)
                 .putExtra(EXTRA_REPLY_ACTION, ACTION_SET_HIDE_CONFIG),
         )
-        Log.d("FuseFixer", "requested hide config replyPackage=${appContext.packageName} queryToken=$requestToken")
+        Log.d("FuseHide", "requested hide config replyPackage=${appContext.packageName} queryToken=$requestToken")
     }
 
     @JvmStatic
@@ -227,7 +227,7 @@ object HideConfigStore {
         }
         requestInjectedProcessConfigBundle(context) { bundle ->
             val applied = applyBundleToNative(bundle)
-            Log.d("FuseFixer", "initial config fallback applied=$applied")
+            Log.d("FuseHide", "initial config fallback applied=$applied")
             callback?.onResult(applied)
         }
         return false

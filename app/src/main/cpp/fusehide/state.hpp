@@ -77,9 +77,9 @@ struct DirectoryEntry {
 }  // namespace fuse
 }  // namespace mediaprovider
 
-namespace fusefixer {
+namespace fusehide {
 
-inline constexpr const char* kLogTag = "FuseFixer";
+inline constexpr const char* kLogTag = "FuseHide";
 inline constexpr const char* kTargetLibrary = "libfuse_jni.so";
 inline constexpr std::string_view kVisibleStorageRoots[] = {"/storage/emulated/0"};
 // Optional stress mode: when enabled, treat every first-level entry under kVisibleStorageRoots
@@ -97,8 +97,8 @@ inline constexpr std::string_view kHiddenRootEntryNames[] = {
 inline constexpr std::string_view kHiddenRelativePaths[] = {};
 inline constexpr std::string_view kHiddenPackages[] = {
     "com.eltavine.duckdetector",
-    "io.github.xiaotong6666.fusefixer",
-    "io.github.a13e300.fusefixer",
+    "io.github.xiaotong6666.fusehide",
+    "io.github.a13e300.fusehide",
 };
 
 #if defined(NDEBUG)
@@ -521,4 +521,4 @@ DirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view par
 DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, const std::string& path,
                                             DIR* dirp);
 
-}  // namespace fusefixer
+}  // namespace fusehide

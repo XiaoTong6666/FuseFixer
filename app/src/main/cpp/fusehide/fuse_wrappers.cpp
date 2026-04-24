@@ -1,6 +1,6 @@
 #include "wrappers.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 namespace {
 
@@ -1295,4 +1295,4 @@ bool ShouldHideTestPath(uint32_t uid, std::string_view path) {
     return HiddenPathPolicy::ShouldHideTestPath(uid, path);
 }
 
-}  // namespace fusefixer
+}  // namespace fusehide

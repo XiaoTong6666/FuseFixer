@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">调整运行时隐藏配置，并验证 MediaProvider 的实际使用情况。</string>
     <string name="home_subtitle_probe">针对被 Hook 的 MediaProvider 进程运行直接路径检测。</string>
     <string name="tab_policy">配置</string>

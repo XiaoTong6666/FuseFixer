@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">FuseFixer</string>
+    <string name="app_name">FuseHide</string>
     <string name="home_subtitle_policy">런타임 숨김 설정을 조정하고 MediaProvider가 실제로 사용 중인 설정을 확인합니다.</string>
     <string name="home_subtitle_probe">후킹된 MediaProvider 프로세스에 대해 직접 경로 검사를 실행합니다.</string>
     <string name="tab_policy">설정</string>

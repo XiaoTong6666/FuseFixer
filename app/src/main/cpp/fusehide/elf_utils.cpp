@@ -1,6 +1,6 @@
 #include "elf_utils.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 // Module discovery
 
@@ -1136,4 +1136,4 @@ std::vector<uintptr_t> FindRuntimeRelocationSlotsForSymbol(const RuntimeDynamicI
     return slots;
 }
 
-}  // namespace fusefixer
+}  // namespace fusehide

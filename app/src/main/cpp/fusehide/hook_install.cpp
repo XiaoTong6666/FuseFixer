@@ -1,7 +1,7 @@
 #include "elf_utils.hpp"
 #include "wrappers.hpp"
 
-namespace fusefixer {
+namespace fusehide {
 
 // Compare hook installer
 // Original signature (simplified):
@@ -1573,4 +1573,4 @@ void InstallFuseHooks() {
         reinterpret_cast<void*>(gUHasBinaryProperty));
 }
 
-}  // namespace fusefixer
+}  // namespace fusehide

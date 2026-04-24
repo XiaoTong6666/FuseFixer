@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "fusefixer"
+rootProject.name = "fusehide"
 include(":app")
 include(":xposed-stubs")

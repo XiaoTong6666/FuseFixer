@@ -22,7 +22,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="FuseFixer" />
+            android:value="FuseHide" />
         <meta-data
             android:name="xposedminversion"
             android:value="93" />
@@ -31,7 +31,7 @@
             android:resource="@array/scope" />
 
         <activity
-            android:name="io.github.xiaotong6666.fusefixer.MainActivity"
+            android:name="io.github.xiaotong6666.fusehide.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -41,15 +41,15 @@
         </activity>
 
         <provider
-            android:name="io.github.xiaotong6666.fusefixer.HideConfigProvider"
-            android:authorities="io.github.xiaotong6666.fusefixer.hideconfig"
+            android:name="io.github.xiaotong6666.fusehide.HideConfigProvider"
+            android:authorities="io.github.xiaotong6666.fusehide.hideconfig"
             android:exported="true" />
 
         <receiver
-            android:name="io.github.xiaotong6666.fusefixer.HideConfigRequestReceiver"
+            android:name="io.github.xiaotong6666.fusehide.HideConfigRequestReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="io.github.xiaotong6666.fusefixer.REQUEST_HIDE_CONFIG" />
+                <action android:name="io.github.xiaotong6666.fusehide.REQUEST_HIDE_CONFIG" />
             </intent-filter>
         </receiver>
     </application>
