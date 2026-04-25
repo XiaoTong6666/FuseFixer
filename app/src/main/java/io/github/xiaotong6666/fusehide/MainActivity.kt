@@ -39,12 +39,10 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.pager.HorizontalPager
@@ -67,20 +65,27 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalView
+import android.view.HapticFeedbackConstants
+
 import io.github.xiaotong6666.fusehide.ui.theme.fuseHideTheme
 import kotlinx.coroutines.launch
+
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
 import java.io.File
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
@@ -89,13 +94,21 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 
 private data class HideConfigDiff(
     val hasDifferences: Boolean,
     val summary: String,
     val details: String,
+
 )
 
+private data class GridActionItem(
+    val label: String,
+    val action: () -> Unit,
+    val isError: Boolean = false
+)
 class MainActivity : ComponentActivity() {
     companion object {
         private const val APP_PACKAGE = "io.github.xiaotong6666.fusehide"
@@ -798,8 +811,10 @@ private fun fuseFixerHomeScreen(
     onCopyAllClick: () -> Unit,
     onSelfDataClick: () -> Unit,
 ) {
+    val view = LocalView.current
     val pagerState = rememberPagerState(initialPage = selectedTab, pageCount = { 2 })
     val coroutineScope = rememberCoroutineScope()
+    val scrollBehavior = MiuixScrollBehavior()
 
     LaunchedEffect(selectedTab) {
         if (pagerState.currentPage != selectedTab) {
@@ -814,12 +829,13 @@ private fun fuseFixerHomeScreen(
     }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            SmallTopAppBar(
+            TopAppBar(
                 title = stringResource(R.string.app_name),
                 color = MiuixTheme.colorScheme.surface,
                 titleColor = MiuixTheme.colorScheme.onSurface,
+                scrollBehavior = scrollBehavior,
                 subtitle = if (selectedTab == 0) {
                     stringResource(R.string.home_subtitle_policy)
                 } else {
@@ -834,6 +850,7 @@ private fun fuseFixerHomeScreen(
                         ),
                         selectedTabIndex = selectedTab,
                         onTabSelected = {
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                             onTabSelected(it)
                             coroutineScope.launch { pagerState.animateScrollToPage(it) }
                         },
@@ -946,6 +963,7 @@ private fun configScreen(
     onRefreshAppliedConfigClick: () -> Unit,
     contentPadding: PaddingValues,
 ) {
+    val view = LocalView.current
     val scrollState = rememberScrollState()
     var showDetailedDiff by remember { mutableStateOf(false) }
     var showAppliedSnapshot by remember { mutableStateOf(false) }
@@ -966,23 +984,21 @@ private fun configScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(contentPadding)
-            .consumeWindowInsets(contentPadding)
             .verticalScroll(scrollState)
-            .navigationBarsPadding()
+            .padding(contentPadding)
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         sectionCard {
             Text(
                 stringResource(R.string.section_runtime_policy),
-                style = MiuixTheme.textStyles.title3,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(6.dp))
             Text(
                 text = stringResource(R.string.section_runtime_policy_desc),
-                style = MiuixTheme.textStyles.body1,
+                style = MiuixTheme.textStyles.footnote1,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
             Spacer(Modifier.height(12.dp))
@@ -1017,7 +1033,7 @@ private fun configScreen(
         sectionCard {
             Text(
                 stringResource(R.string.section_editable_draft),
-                style = MiuixTheme.textStyles.title4,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(4.dp))
@@ -1028,6 +1044,7 @@ private fun configScreen(
             )
             Spacer(Modifier.height(12.dp))
             Card(
+                onClick = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); onEnableHideAllRootEntriesChanged(!enableHideAllRootEntries) },
                 colors = CardDefaults.defaultColors(
                     color = MiuixTheme.colorScheme.surfaceContainerHighest,
                     contentColor = MiuixTheme.colorScheme.onSurfaceContainerHighest,
@@ -1043,7 +1060,7 @@ private fun configScreen(
                 ) {
                     Checkbox(
                         state = if (enableHideAllRootEntries) ToggleableState.On else ToggleableState.Off,
-                        onClick = { onEnableHideAllRootEntriesChanged(!enableHideAllRootEntries) },
+                        onClick = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); onEnableHideAllRootEntriesChanged(!enableHideAllRootEntries) },
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(stringResource(R.string.field_hide_all_title), style = MiuixTheme.textStyles.headline2)
@@ -1064,8 +1081,9 @@ private fun configScreen(
                 backgroundColor = MiuixTheme.colorScheme.surfaceContainerHighest,
                 labelColor = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 borderColor = MiuixTheme.colorScheme.primary,
-                textStyle = MiuixTheme.textStyles.main.copy(color = MiuixTheme.colorScheme.onSurface),
-                minLines = 3,
+                textStyle = MiuixTheme.textStyles.main.copy(color = MiuixTheme.colorScheme.onSurfaceSecondary),
+                minLines = 5,
+                maxLines = 5,
             )
             Spacer(Modifier.height(4.dp))
             Text(
@@ -1082,8 +1100,9 @@ private fun configScreen(
                 backgroundColor = MiuixTheme.colorScheme.surfaceContainerHighest,
                 labelColor = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 borderColor = MiuixTheme.colorScheme.primary,
-                textStyle = MiuixTheme.textStyles.main.copy(color = MiuixTheme.colorScheme.onSurface),
+                textStyle = MiuixTheme.textStyles.main.copy(color = MiuixTheme.colorScheme.onSurfaceSecondary),
                 minLines = 5,
+                maxLines = 5,
             )
             Spacer(Modifier.height(4.dp))
             Text(
@@ -1100,8 +1119,9 @@ private fun configScreen(
                 backgroundColor = MiuixTheme.colorScheme.surfaceContainerHighest,
                 labelColor = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 borderColor = MiuixTheme.colorScheme.primary,
-                textStyle = MiuixTheme.textStyles.main.copy(color = MiuixTheme.colorScheme.onSurface),
+                textStyle = MiuixTheme.textStyles.main.copy(color = MiuixTheme.colorScheme.onSurfaceSecondary),
                 minLines = 5,
+                maxLines = 5,
             )
             Spacer(Modifier.height(4.dp))
             Text(
@@ -1129,7 +1149,7 @@ private fun configScreen(
         sectionCard {
             Text(
                 stringResource(R.string.section_apply_feedback),
-                style = MiuixTheme.textStyles.title4,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(12.dp))
@@ -1205,7 +1225,9 @@ private fun configScreen(
                 }
                 TextButton(
                     text = if (showAppliedSnapshot) stringResource(R.string.button_hide) else stringResource(R.string.button_show),
-                    onClick = { showAppliedSnapshot = !showAppliedSnapshot },
+                    onClick = {
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        showAppliedSnapshot = !showAppliedSnapshot },
                 )
             }
             if (showAppliedSnapshot) {
@@ -1257,17 +1279,15 @@ private fun debugScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(contentPadding)
-            .consumeWindowInsets(contentPadding)
             .verticalScroll(scrollState)
-            .navigationBarsPadding()
+            .padding(contentPadding)
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         sectionCard {
             Text(
                 stringResource(R.string.section_probe_target),
-                style = MiuixTheme.textStyles.title3,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(6.dp))
@@ -1308,7 +1328,7 @@ private fun debugScreen(
         sectionCard {
             Text(
                 stringResource(R.string.section_paths),
-                style = MiuixTheme.textStyles.title4,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(12.dp))
@@ -1352,50 +1372,50 @@ private fun debugScreen(
         sectionCard {
             Text(
                 stringResource(R.string.section_common_probes),
-                style = MiuixTheme.textStyles.title4,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(12.dp))
             actionGrid(
                 listOf(
-                    stringResource(R.string.button_stat) to onStatClick,
-                    stringResource(R.string.button_access) to onAccessClick,
-                    stringResource(R.string.button_list) to onListClick,
-                    stringResource(R.string.button_open) to onOpenClick,
+                    GridActionItem(stringResource(R.string.button_stat), onStatClick),
+                    GridActionItem(stringResource(R.string.button_access), onAccessClick),
+                    GridActionItem(stringResource(R.string.button_list), onListClick),
+                    GridActionItem(stringResource(R.string.button_open), onOpenClick),
                 ),
             )
             Spacer(Modifier.height(12.dp))
             Text(
                 stringResource(R.string.section_mutation_probes),
-                style = MiuixTheme.textStyles.headline2,
+                style = MiuixTheme.textStyles.title4.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(10.dp))
             actionGrid(
                 listOf(
-                    stringResource(R.string.button_get_con) to onGetConClick,
-                    stringResource(R.string.button_create) to onCreateClick,
-                    stringResource(R.string.button_mkdir) to onMkdirClick,
-                    stringResource(R.string.button_rename_move) to onMoveClick,
-                    stringResource(R.string.button_rmdir) to onRmdirClick,
-                    stringResource(R.string.button_unlink) to onUnlinkClick,
+                    GridActionItem(stringResource(R.string.button_get_con), onGetConClick),
+                    GridActionItem(stringResource(R.string.button_create), onCreateClick),
+                    GridActionItem(stringResource(R.string.button_mkdir), onMkdirClick),
+                    GridActionItem(stringResource(R.string.button_rename_move), onMoveClick),
+                    GridActionItem(stringResource(R.string.button_rmdir), onRmdirClick, isError = true),
+                    GridActionItem(stringResource(R.string.button_unlink), onUnlinkClick),
                 ),
             )
             Spacer(Modifier.height(12.dp))
             Text(
                 stringResource(R.string.section_utilities),
-                style = MiuixTheme.textStyles.headline2,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(10.dp))
             actionGrid(
                 listOf(
-                    stringResource(R.string.button_all_pkg) to onAllPkgClick,
-                    stringResource(R.string.button_insert_zwj) to onInsertZwjClick,
-                    stringResource(R.string.button_clear_output) to onClearClick,
-                    stringResource(R.string.button_reset_path) to onResetClick,
-                    stringResource(R.string.button_copy_output) to onCopyAllClick,
-                    stringResource(R.string.button_self_data) to onSelfDataClick,
+                    GridActionItem(stringResource(R.string.button_all_pkg), onAllPkgClick),
+                    GridActionItem(stringResource(R.string.button_insert_zwj), onInsertZwjClick),
+                    GridActionItem(stringResource(R.string.button_clear_output), onClearClick),
+                    GridActionItem(stringResource(R.string.button_reset_path), onResetClick),
+                    GridActionItem(stringResource(R.string.button_copy_output), onCopyAllClick),
+                    GridActionItem(stringResource(R.string.button_self_data), onSelfDataClick),
                 ),
             )
         }
@@ -1403,7 +1423,7 @@ private fun debugScreen(
         sectionCard {
             Text(
                 stringResource(R.string.section_probe_output),
-                style = MiuixTheme.textStyles.title4,
+                style = MiuixTheme.textStyles.title4.copy(fontWeight = FontWeight.Medium),
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(10.dp))
@@ -1434,42 +1454,52 @@ private fun dualActionRow(
                 modifier = Modifier.weight(1f).height(56.dp),
                 colors = ButtonDefaults.buttonColorsPrimary(),
             ) {
-                Text(primaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button)
+                Text(primaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button.copy(fontWeight = FontWeight.Medium))
             }
         } else {
             Button(
                 onClick = onPrimaryClick,
                 modifier = Modifier.weight(1f).height(56.dp),
-                colors = ButtonDefaults.buttonColors(),
+                colors = ButtonDefaults.buttonColors().copy(MiuixTheme.colorScheme.secondary),
             ) {
-                Text(primaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button)
+                Text(primaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button.copy(fontWeight = FontWeight.Medium))
             }
         }
         Button(
             onClick = onSecondaryClick,
             modifier = Modifier.weight(1f).height(56.dp),
-            colors = ButtonDefaults.buttonColors(),
+            colors = ButtonDefaults.buttonColors().copy(MiuixTheme.colorScheme.secondary),
         ) {
-            Text(secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button)
+            Text(secondaryLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button.copy(fontWeight = FontWeight.Medium))
         }
     }
 }
 
 @Composable
-private fun actionGrid(actions: List<Pair<String, () -> Unit>>) {
+private fun actionGrid(actions: List<GridActionItem>) {
     actions.chunked(2).forEach { rowActions ->
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            rowActions.forEach { (label, action) ->
+            rowActions.forEach { item ->
+
+                val currentBgColor = if (item.isError) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.secondary
+
                 Button(
-                    onClick = action,
+                    onClick = item.action,
                     modifier = Modifier.weight(1f).height(56.dp),
-                    colors = ButtonDefaults.buttonColors(),
+                    colors = ButtonDefaults.buttonColors().copy(currentBgColor),
                     insideMargin = PaddingValues(horizontal = 12.dp, vertical = 14.dp),
                 ) {
-                    Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, style = MiuixTheme.textStyles.button)
+                    Text(
+                        text = item.label,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        color = if (item.isError) MiuixTheme.colorScheme.onError else androidx.compose.ui.graphics.Color.Unspecified,
+                        style = MiuixTheme.textStyles.button.copy(fontWeight = FontWeight.Medium)
+                    )
                 }
             }
             if (rowActions.size == 1) {
@@ -1485,15 +1515,13 @@ private fun sectionCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.defaultColors(
-            color = MiuixTheme.colorScheme.surfaceContainerHigh,
+            color = MiuixTheme.colorScheme.surfaceContainerHigh.copy(0.45f),
             contentColor = MiuixTheme.colorScheme.onSurfaceContainerHigh,
         ),
         insideMargin = PaddingValues(0.dp),
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             content = content,
         )
     }
@@ -1520,8 +1548,7 @@ private fun statusChip(
         MiuixTheme.colorScheme.onSurfaceContainerHighest
     }
     Card(
-        modifier = modifier
-            .heightIn(min = 118.dp),
+        modifier = modifier.heightIn(min = 118.dp),
         colors = CardDefaults.defaultColors(color = containerColor, contentColor = contentColor),
         onClick = onClick,
         insideMargin = PaddingValues(0.dp),
@@ -1672,7 +1699,7 @@ private fun infoPanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (title.isNotEmpty()) {
-                Text(title, style = MiuixTheme.textStyles.headline2)
+                Text(title, style = MiuixTheme.textStyles.footnote2, color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.45f))
             }
             SelectionContainer {
                 Text(
@@ -1698,6 +1725,71 @@ private fun monospaceBlock(text: String, modifier: Modifier = Modifier) {
                 .wrapContentHeight(),
             fontFamily = FontFamily.Monospace,
             style = MiuixTheme.textStyles.body1,
+        )
+    }
+}
+
+// For Android Studio preview compose interface.
+@Preview(showBackground = true, device = "id:pixel_9_pro",heightDp = 1890)
+@Composable
+private fun PreviewFuseFixerHomeScreen() {
+    io.github.xiaotong6666.fusehide.ui.theme.fuseHideTheme {
+        fuseFixerHomeScreen(
+            selectedTab = 0, // 0 预览配置页，改成 1 预览测试页
+            onTabSelected = {},
+            infoText = "Kernel: 6.1.118\nDevice: Fuxi\nSDK: 3600000",
+            statusText = "Hooked: com.example.app (1234)",
+            isHooked = true,
+            hookedPackage = "com.example.app",
+            hookedPid = 1234,
+            hookCheckCompleted = true,
+            configStatusText = "The saved hidden configuration has been loaded.",
+            lastAckTokenText = "-",
+            lastAckResultText = "-",
+            lastApplyTimeText = "-",
+            draftVsAppliedDiff = HideConfigDiff(
+                hasDifferences = false,
+                summary = "None",
+                details = ""
+            ),
+            appliedConfigSnapshotText = "Current native config snapshot...",
+            highlightConfigResults = false,
+            configResultsScrollToken = 0,
+            enableHideAllRootEntries = true,
+            hideAllRootEntriesExemptionsText = "Android\nDCIM\nDocument\nDownload\nMovies\nPictures",
+            hiddenTargetsText = "xinhao\nMT2",
+            hiddenPackagesText = "com.eltavine.duckdetector\nio.github.xiaotong6666.fusehide\nio.github.a13e300.fusefixer",
+            pathText = "/storage/emulated/0/Android",
+            pathText2 = "",
+            outputText = "Stat /storage/emulated/0/Android -> OK",
+
+            onStatusClick = {},
+            onEnableHideAllRootEntriesChanged = {},
+            onHideAllRootEntriesExemptionsChanged = {},
+            onHiddenTargetsChanged = {},
+            onHiddenPackagesChanged = {},
+            onSaveConfigClick = {},
+            onApplyConfigClick = {},
+            onResetConfigClick = {},
+            onRefreshAppliedConfigClick = {},
+            onPathChanged = {},
+            onPath2Changed = {},
+            onStatClick = {},
+            onAccessClick = {},
+            onListClick = {},
+            onOpenClick = {},
+            onGetConClick = {},
+            onCreateClick = {},
+            onMkdirClick = {},
+            onMoveClick = {},
+            onRmdirClick = {},
+            onUnlinkClick = {},
+            onAllPkgClick = {},
+            onInsertZwjClick = {},
+            onClearClick = {},
+            onResetClick = {},
+            onCopyAllClick = {},
+            onSelfDataClick = {}
         )
     }
 }
