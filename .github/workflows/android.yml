@@ -75,6 +75,19 @@ jobs:
         echo "count=$COUNT" >> $GITHUB_OUTPUT
         echo "Version: v$COUNT"
 
+    - name: Compute version info
+      id: version_info
+      run: |
+        VERSION_CODE=$(git rev-list --count HEAD)
+        VERSION_NAME="1.${VERSION_CODE}"
+        COMMUNITY_TAG="${VERSION_CODE}-${VERSION_NAME}"
+        echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+        echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+        echo "COMMUNITY_TAG=$COMMUNITY_TAG" >> $GITHUB_ENV
+        echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+        echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+        echo "community_tag=$COMMUNITY_TAG" >> $GITHUB_OUTPUT
+
     - name: Rename APKs
       run: |
         find app/build/outputs/apk -type f -name "*.apk" | while read file; do
@@ -112,3 +125,13 @@ jobs:
         files: |
           app/build/outputs/apk/debug/FuseHide_Debug_v*.apk
           app/build/outputs/apk/release/FuseHide_v*.apk
+
+    - name: Sync community release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ secrets.XPOSED_REPO_TOKEN }}
+      run: |
+        test -n "$GH_TOKEN"
+        RELEASE_APK=$(ls app/build/outputs/apk/release/FuseHide_v*.apk)
+        gh release view "$COMMUNITY_TAG" --repo Xposed-Modules-Repo/io.github.xiaotong6666.fusehide >/dev/null 2>&1 || gh release create "$COMMUNITY_TAG" "$RELEASE_APK" --repo Xposed-Modules-Repo/io.github.xiaotong6666.fusehide --title "$VERSION_NAME" --notes "同步自主仓库构建产物"
+        gh release upload "$COMMUNITY_TAG" "$RELEASE_APK" --repo Xposed-Modules-Repo/io.github.xiaotong6666.fusehide --clobber
