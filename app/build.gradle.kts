@@ -14,9 +14,17 @@
  * limitations under the License.
  */
 
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
 android {
@@ -53,8 +61,13 @@ android {
     }
 
     signingConfigs {
-        val keystoreFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
-        if (keystoreFile.exists()) {
+        val keystorePath = localProperties.getProperty("ANDROID_DEBUG_KEYSTORE")
+        val keystoreFile = listOfNotNull(
+            keystorePath?.takeIf { it.isNotBlank() }?.let(::file),
+            file(System.getProperty("user.home") + "/.android/debug.keystore"),
+            rootProject.file("release.keystore"),
+        ).firstOrNull { it.exists() }
+        if (keystoreFile != null) {
             register("debugKey") {
                 storeFile = keystoreFile
                 storePassword = "android"
