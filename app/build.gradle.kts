@@ -78,10 +78,7 @@ android {
 
     buildTypes {
         getByName("release") {
-            val debugKey = signingConfigs.findByName("debugKey")
-            if (debugKey != null) {
-                signingConfig = debugKey
-            }
+            signingConfigs.findByName("debugKey")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -90,10 +87,7 @@ android {
             )
         }
         getByName("debug") {
-            val debugKey = signingConfigs.findByName("debugKey")
-            if (debugKey != null) {
-                signingConfig = debugKey
-            }
+            signingConfigs.findByName("debugKey")?.let { signingConfig = it }
         }
     }
     compileOptions {
