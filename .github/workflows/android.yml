@@ -16,8 +16,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ "kc" ]
-
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -48,15 +49,16 @@ jobs:
         restore-keys: |
           gradle-
 
-    - name: Restore Keystore from Secret
+    - name: Restore debug keystore
       env:
         ANDROID_DEBUG_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
       run: |
         if [ -n "$ANDROID_DEBUG_KEYSTORE" ]; then
-          echo "$ANDROID_DEBUG_KEYSTORE" | base64 --decode > release.keystore
-          echo "Keystore restored to release.keystore"
+          mkdir -p ~/.android
+          echo "$ANDROID_DEBUG_KEYSTORE" | base64 --decode > ~/.android/debug.keystore
+          echo "Debug keystore restored."
         else
-          echo "No secret found. Falling back to default debug key."
+          echo "No secret found. Gradle will generate a temporary debug keystore."
         fi
 
     - name: Grant execute permission for gradlew
@@ -113,3 +115,23 @@ jobs:
       with:
         name: app-release
         path: app/build/outputs/apk/release/FuseHide_v*.apk
+
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ steps.commit_count.outputs.count }}
+        overwrite: true
+        files: |
+          app/build/outputs/apk/debug/FuseHide_Debug_v*.apk
+          app/build/outputs/apk/release/FuseHide_v*.apk
+
+    - name: Sync community release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ secrets.XPOSED_REPO_TOKEN }}
+      run: |
+        test -n "$GH_TOKEN"
+        RELEASE_APK=$(ls app/build/outputs/apk/release/FuseHide_v*.apk)
+        gh release view "$COMMUNITY_TAG" --repo Xposed-Modules-Repo/io.github.xiaotong6666.fusehide >/dev/null 2>&1 || gh release create "$COMMUNITY_TAG" "$RELEASE_APK" --repo Xposed-Modules-Repo/io.github.xiaotong6666.fusehide --title "$VERSION_NAME" --notes "同步自主仓库构建产物喵"
+        gh release upload "$COMMUNITY_TAG" "$RELEASE_APK" --repo Xposed-Modules-Repo/io.github.xiaotong6666.fusehide --clobber

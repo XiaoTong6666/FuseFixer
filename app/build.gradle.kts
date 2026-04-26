@@ -27,8 +27,6 @@ if (localPropertiesFile.exists()) {
     localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
-fun getSignProperty(key: String): String? = System.getenv(key) ?: localProperties.getProperty(key)
-
 android {
     namespace = "io.github.xiaotong6666.fusehide"
     compileSdk = 37
@@ -63,14 +61,15 @@ android {
     }
 
     signingConfigs {
-        val keystorePath = getSignProperty("ANDROID_DEBUG_KEYSTORE") ?: run {
-            val f = rootProject.file("release.keystore")
-            if (f.exists()) f.absolutePath else null
-        }
-
-        if (keystorePath != null) {
-            register("releaseKey") {
-                storeFile = file(keystorePath)
+        val keystorePath = localProperties.getProperty("ANDROID_DEBUG_KEYSTORE")
+        val keystoreFile = listOfNotNull(
+            keystorePath?.takeIf { it.isNotBlank() }?.let(::file),
+            file(System.getProperty("user.home") + "/.android/debug.keystore"),
+            rootProject.file("release.keystore"),
+        ).firstOrNull { it.exists() }
+        if (keystoreFile != null) {
+            register("debugKey") {
+                storeFile = keystoreFile
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
@@ -80,7 +79,10 @@ android {
 
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.findByName("releaseKey") ?: signingConfigs.getByName("debug")
+            val debugKey = signingConfigs.findByName("debugKey")
+            if (debugKey != null) {
+                signingConfig = debugKey
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -89,7 +91,10 @@ android {
             )
         }
         getByName("debug") {
-            signingConfig = signingConfigs.findByName("releaseKey") ?: signingConfigs.getByName("debug")
+            val debugKey = signingConfigs.findByName("debugKey")
+            if (debugKey != null) {
+                signingConfig = debugKey
+            }
         }
     }
     compileOptions {
