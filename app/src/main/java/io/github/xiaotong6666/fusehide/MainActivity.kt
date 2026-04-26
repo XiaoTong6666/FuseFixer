@@ -1574,7 +1574,7 @@ private fun statusChip(
             )
             Text(
                 text = value,
-                style = MiuixTheme.textStyles.body1,
+                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
                 color = if (emphasized) Color.White else MiuixTheme.colorScheme.onSurfaceContainerHighest,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1734,7 +1734,7 @@ private fun monospaceBlock(text: String, modifier: Modifier = Modifier) {
 }
 
 // For Android Studio preview compose interface.
-@Preview(showBackground = true, device = "id:pixel_9_pro", heightDp = 1890)
+@Preview(showBackground = true, device = "id:pixel_9_pro")
 @Composable
 private fun previewFuseHideHomeScreen() {
     io.github.xiaotong6666.fusehide.ui.theme.fuseHideTheme {

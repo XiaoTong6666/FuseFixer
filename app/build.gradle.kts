@@ -14,10 +14,20 @@
  * limitations under the License.
  */
 
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+
+fun getSignProperty(key: String): String? = System.getenv(key) ?: localProperties.getProperty(key)
 
 android {
     namespace = "io.github.xiaotong6666.fusehide"
@@ -53,10 +63,14 @@ android {
     }
 
     signingConfigs {
-        val keystoreFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
-        if (keystoreFile.exists()) {
-            register("debugKey") {
-                storeFile = keystoreFile
+        val keystorePath = getSignProperty("ANDROID_DEBUG_KEYSTORE") ?: run {
+            val f = rootProject.file("release.keystore")
+            if (f.exists()) f.absolutePath else null
+        }
+
+        if (keystorePath != null) {
+            register("releaseKey") {
+                storeFile = file(keystorePath)
                 storePassword = "android"
                 keyAlias = "androiddebugkey"
                 keyPassword = "android"
@@ -66,10 +80,7 @@ android {
 
     buildTypes {
         getByName("release") {
-            val debugKey = signingConfigs.findByName("debugKey")
-            if (debugKey != null) {
-                signingConfig = debugKey
-            }
+            signingConfig = signingConfigs.findByName("releaseKey") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -78,10 +89,7 @@ android {
             )
         }
         getByName("debug") {
-            val debugKey = signingConfigs.findByName("debugKey")
-            if (debugKey != null) {
-                signingConfig = debugKey
-            }
+            signingConfig = signingConfigs.findByName("releaseKey") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
