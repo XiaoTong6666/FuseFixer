@@ -989,7 +989,7 @@ private fun configScreen(
         sectionCard {
             Text(
                 stringResource(R.string.section_runtime_policy),
-                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
+                style = MiuixTheme.textStyles.body1,
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(6.dp))
@@ -1734,7 +1734,7 @@ private fun monospaceBlock(text: String, modifier: Modifier = Modifier) {
 }
 
 // For Android Studio preview compose interface.
-@Preview(showBackground = true, device = "id:pixel_9_pro")
+@Preview(showBackground = true, device = "id:pixel_9_pro", heightDp = 1890)
 @Composable
 private fun previewFuseHideHomeScreen() {
     io.github.xiaotong6666.fusehide.ui.theme.fuseHideTheme {
