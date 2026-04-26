@@ -65,7 +65,7 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build APKs
-      run: ./gradlew assembleDebug assembleRelease --parallel --build-cache
+      run: ./gradlew assembleDebug assembleRelease
 
     - name: Get commit count
       id: commit_count
