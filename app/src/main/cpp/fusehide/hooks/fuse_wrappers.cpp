@@ -569,7 +569,7 @@ extern "C" void WrappedPfLookup(fuse_req_t req, uint64_t parent, const char* nam
     DebugLogPrint(3, "lookup: req=%lu parent=%s name=%s", (unsigned long)req->unique,
                   InodePath(parent).c_str(), name ? DebugPreview(name).c_str() : "null");
 
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*)>(gOriginalPfLookup);
+    const auto fn = gOriginalPfLookup.get();
     if (fn)
         fn(req, parent, name);
     gCurrentLookupUid = 0;
@@ -617,7 +617,7 @@ DirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view par
 
 DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStringParam pathArg,
                                             DIR* dirp) {
-    auto fn = reinterpret_cast<GetDirectoryEntriesFn>(gOriginalGetDirectoryEntries);
+    const auto fn = gOriginalGetDirectoryEntries.get();
     const std::string path(AbiStringView(pathArg));
     // Cache only the already-filtered visible root listing. Nested directories still rely on the
     // normal tracked-path invalidation path because their visibility is not just a root child set.
@@ -661,8 +661,7 @@ DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStri
 
 void WrappedAddDirectoryEntriesFromLowerFs(DIR* dirp, LowerFsDirentFilterFn filter,
                                            DirectoryEntries* entries) {
-    auto fn =
-        reinterpret_cast<AddDirectoryEntriesFromLowerFsFn>(gOriginalAddDirectoryEntriesFromLowerFs);
+    const auto fn = gOriginalAddDirectoryEntriesFromLowerFs.get();
     if (fn == nullptr) {
         return;
     }
@@ -703,8 +702,7 @@ extern "C" void WrappedPfReaddirPostfilter(fuse_req_t req, uint64_t ino, uint32_
                                            const void* dirents_in, void* fi) {
     const ScopedFuseRequestSession scopedSession(req);
     const uint32_t uid = RuntimeState::ReqUid(req);
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, uint32_t, off_t, off_t, size_t,
-                                        const void*, void*)>(gOriginalPfReaddirPostfilter);
+    const auto fn = gOriginalPfReaddirPostfilter.get();
     if (fn == nullptr) {
         return;
     }
@@ -744,9 +742,7 @@ extern "C" void WrappedPfLookupPostfilter(fuse_req_t req, uint64_t parent, uint3
         }
         ArmHiddenErrorRemap(req, ENOENT, "pf_lookup_postfilter");
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, uint32_t, const char*,
-                                        struct fuse_entry_out*, struct fuse_entry_bpf_out*)>(
-        gOriginalPfLookupPostfilter);
+    const auto fn = gOriginalPfLookupPostfilter.get();
     if (fn) {
         gInPfLookupPostfilter = true;
         fn(req, parent, error_in, name, feo, febo);
@@ -756,7 +752,7 @@ extern "C" void WrappedPfLookupPostfilter(fuse_req_t req, uint64_t parent, uint3
 
 extern "C" void WrappedPfAccess(fuse_req_t req, uint64_t ino, int mask) {
     const ScopedFuseRequestSession scopedSession(req);
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, int)>(gOriginalPfAccess);
+    const auto fn = gOriginalPfAccess.get();
     if (fn) {
         fn(req, ino, mask);
     }
@@ -764,7 +760,7 @@ extern "C" void WrappedPfAccess(fuse_req_t req, uint64_t ino, int mask) {
 
 extern "C" void WrappedPfOpen(fuse_req_t req, uint64_t ino, void* fi) {
     const ScopedFuseRequestSession scopedSession(req);
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, void*)>(gOriginalPfOpen);
+    const auto fn = gOriginalPfOpen.get();
     if (fn) {
         fn(req, ino, fi);
     }
@@ -772,7 +768,7 @@ extern "C" void WrappedPfOpen(fuse_req_t req, uint64_t ino, void* fi) {
 
 extern "C" void WrappedPfOpendir(fuse_req_t req, uint64_t ino, void* fi) {
     const ScopedFuseRequestSession scopedSession(req);
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, void*)>(gOriginalPfOpendir);
+    const auto fn = gOriginalPfOpendir.get();
     if (fn) {
         fn(req, ino, fi);
     }
@@ -795,8 +791,7 @@ extern "C" void WrappedPfMkdir(fuse_req_t req, uint64_t parent, const char* name
     if (ReplyHiddenNamedTargetError(req, "pf_mkdir", kind, EACCES, ENOENT)) {
         return;
     }
-    auto fn =
-        reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*, uint32_t)>(gOriginalPfMkdir);
+    const auto fn = gOriginalPfMkdir.get();
     if (fn) {
         ScopedCreateUid scopedUid(uid);
         fn(req, parent, name, mode);
@@ -822,8 +817,7 @@ extern "C" void WrappedPfMknod(fuse_req_t req, uint64_t parent, const char* name
     if (ReplyHiddenNamedTargetError(req, "pf_mknod", kind, EPERM, ENOENT)) {
         return;
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*, uint32_t, uint64_t)>(
-        gOriginalPfMknod);
+    const auto fn = gOriginalPfMknod.get();
     if (fn) {
         ScopedCreateUid scopedUid(uid);
         fn(req, parent, name, mode, rdev);
@@ -849,7 +843,7 @@ extern "C" void WrappedPfUnlink(fuse_req_t req, uint64_t parent, const char* nam
     if (ResolveVisibleParentPath(parent, &parentPath) && IsVisibleRootPath(parentPath)) {
         TrackPendingRootSnapshotMutation(req, "pf_unlink");
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*)>(gOriginalPfUnlink);
+    const auto fn = gOriginalPfUnlink.get();
     if (fn) {
         fn(req, parent, name);
     }
@@ -869,7 +863,7 @@ extern "C" void WrappedPfRmdir(fuse_req_t req, uint64_t parent, const char* name
     if (ResolveVisibleParentPath(parent, &parentPath) && IsVisibleRootPath(parentPath)) {
         TrackPendingRootSnapshotMutation(req, "pf_rmdir");
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*)>(gOriginalPfRmdir);
+    const auto fn = gOriginalPfRmdir.get();
     if (fn) {
         fn(req, parent, name);
     }
@@ -919,8 +913,7 @@ extern "C" void WrappedPfRename(fuse_req_t req, uint64_t parent, const char* nam
     if (touchesRoot) {
         TrackPendingRootSnapshotMutation(req, "pf_rename");
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*, uint64_t, const char*,
-                                        uint32_t)>(gOriginalPfRename);
+    const auto fn = gOriginalPfRename.get();
     if (fn) {
         fn(req, parent, name, new_parent, new_name, flags);
     }
@@ -946,8 +939,7 @@ extern "C" void WrappedPfCreate(fuse_req_t req, uint64_t parent, const char* nam
     if (ReplyHiddenNamedTargetError(req, "pf_create", kind, EPERM, ENOENT)) {
         return;
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, const char*, uint32_t, void*)>(
-        gOriginalPfCreate);
+    const auto fn = gOriginalPfCreate.get();
     if (fn) {
         ScopedCreateUid scopedUid(uid);
         fn(req, parent, name, mode, fi);
@@ -961,8 +953,7 @@ extern "C" void WrappedPfCreate(fuse_req_t req, uint64_t parent, const char* nam
 extern "C" void WrappedPfReaddir(fuse_req_t req, uint64_t ino, size_t size, off_t off, void* fi) {
     const ScopedFuseRequestSession scopedSession(req);
     const uint32_t uid = RuntimeState::ReqUid(req);
-    auto fn =
-        reinterpret_cast<void (*)(fuse_req_t, uint64_t, size_t, off_t, void*)>(gOriginalPfReaddir);
+    const auto fn = gOriginalPfReaddir.get();
     if (fn == nullptr) {
         return;
     }
@@ -987,8 +978,7 @@ extern "C" void WrappedDoReaddirCommon(fuse_req_t req, uint64_t ino, size_t size
                                        void* fi, bool plus) {
     const ScopedFuseRequestSession scopedSession(req);
     const uint32_t uid = RuntimeState::ReqUid(req);
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, size_t, off_t, void*, bool)>(
-        gOriginalDoReaddirCommon);
+    const auto fn = gOriginalDoReaddirCommon.get();
     if (fn == nullptr) {
         return;
     }
@@ -1013,8 +1003,7 @@ extern "C" void WrappedPfReaddirplus(fuse_req_t req, uint64_t ino, size_t size, 
                                      void* fi) {
     const ScopedFuseRequestSession scopedSession(req);
     const uint32_t uid = RuntimeState::ReqUid(req);
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, size_t, off_t, void*)>(
-        gOriginalPfReaddirplus);
+    const auto fn = gOriginalPfReaddirplus.get();
     if (fn == nullptr) {
         return;
     }
@@ -1037,8 +1026,7 @@ extern "C" void WrappedPfReaddirplus(fuse_req_t req, uint64_t ino, size_t size, 
 
 extern "C" int WrappedNotifyInvalEntry(void* se, uint64_t parent, const char* name,
                                        size_t namelen) {
-    auto fn =
-        reinterpret_cast<int (*)(void*, uint64_t, const char*, size_t)>(gOriginalNotifyInvalEntry);
+    const auto fn = gOriginalNotifyInvalEntry.get();
     int ret = fn ? fn(se, parent, name, namelen) : -1;
     DebugLogPrint(3, "notify_inval_entry: ino=0x%lx name=%s ret=%d", (unsigned long)parent,
                   name ? DebugPreview(std::string_view(name, namelen)).c_str() : "null", ret);
@@ -1046,7 +1034,7 @@ extern "C" int WrappedNotifyInvalEntry(void* se, uint64_t parent, const char* na
 }
 
 extern "C" int WrappedNotifyInvalInode(void* se, uint64_t ino, off_t off, off_t len) {
-    auto fn = reinterpret_cast<int (*)(void*, uint64_t, off_t, off_t)>(gOriginalNotifyInvalInode);
+    const auto fn = gOriginalNotifyInvalInode.get();
     int ret = fn ? fn(se, ino, off, len) : -1;
     // Device libfuse_jni routes a fallback invalidation path through notify_inval_inode().
     // The callback receives an inode handle, not a verified node object, so only log the rawvalue
@@ -1064,8 +1052,7 @@ extern "C" int WrappedNotifyInvalInode(void* se, uint64_t ino, off_t off, off_t 
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1166
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1211
 extern "C" int WrappedReplyEntry(fuse_req_t req, const struct fuse_entry_param* e) {
-    auto fn =
-        reinterpret_cast<int (*)(fuse_req_t, const struct fuse_entry_param*)>(gOriginalReplyEntry);
+    const auto fn = gOriginalReplyEntry.get();
     const bool hiddenLookupForUid = HiddenPathPolicy::IsTestHiddenUid(RuntimeState::ReqUid(req)) &&
                                     (gTrackRootHiddenLookup || gTrackHiddenSubtreeLookup);
     if (hiddenLookupForUid) {
@@ -1215,7 +1202,7 @@ extern "C" int WrappedReplyEntry(fuse_req_t req, const struct fuse_entry_param* 
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#510
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1002
 extern "C" int WrappedReplyAttr(fuse_req_t req, const struct stat* attr, double timeout) {
-    auto fn = reinterpret_cast<int (*)(fuse_req_t, const struct stat*, double)>(gOriginalReplyAttr);
+    const auto fn = gOriginalReplyAttr.get();
     const double replyTimeout = gZeroAttrCacheForCurrentGetattr ? 0.0 : timeout;
     if (gZeroAttrCacheForCurrentGetattr) {
         DebugLogPrint(4, "disable attr cache req=%p timeout=%.2le", req, replyTimeout);
@@ -1231,7 +1218,7 @@ extern "C" int WrappedReplyAttr(fuse_req_t req, const struct stat* attr, double 
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1941
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1997
 extern "C" int WrappedReplyBuf(fuse_req_t req, const char* buf, size_t size) {
-    auto fn = reinterpret_cast<int (*)(fuse_req_t, const char*, size_t)>(gOriginalReplyBuf);
+    const auto fn = gOriginalReplyBuf.get();
     const char* replyBuf = buf;
     size_t replySize = size;
     std::vector<char> filteredStorage;
@@ -1424,7 +1411,7 @@ extern "C" void WrappedPfGetattr(fuse_req_t req, uint64_t ino, void* fi) {
         DebugLogPrint(4, "pf_getattr test uid=%u ino=0x%lx", static_cast<unsigned>(uid),
                       (unsigned long)ino);
     }
-    auto fn = reinterpret_cast<void (*)(fuse_req_t, uint64_t, void*)>(gOriginalPfGetattr);
+    const auto fn = gOriginalPfGetattr.get();
     if (fn) {
         gInPfGetattr = true;
         gPfGetattrUid = uid;
@@ -1472,7 +1459,7 @@ extern "C" int WrappedLstat(const char* path, struct stat* st) {
             return -1;
         }
     }
-    auto fn = reinterpret_cast<int (*)(const char*, struct stat*)>(gOriginalLstat);
+    const auto fn = gOriginalLstat.get();
     if (fn) {
         const int ret = fn(path, st);
         if (ret == 0 && gInPfGetattr && gPfGetattrIno != 0) {
@@ -1505,7 +1492,7 @@ extern "C" int WrappedStat(const char* path, struct stat* st) {
         errno = ENOENT;
         return -1;
     }
-    auto fn = reinterpret_cast<int (*)(const char*, struct stat*)>(gOriginalStat);
+    const auto fn = gOriginalStat.get();
     if (fn) {
         return fn(path, st);
     }
@@ -1525,8 +1512,7 @@ extern "C" ssize_t WrappedGetxattr(const char* path, const char* name, void* val
         errno = ENOENT;
         return -1;
     }
-    auto fn =
-        reinterpret_cast<ssize_t (*)(const char*, const char*, void*, size_t)>(gOriginalGetxattr);
+    const auto fn = gOriginalGetxattr.get();
     if (fn) {
         return fn(path, name, value, size);
     }
@@ -1546,8 +1532,7 @@ extern "C" ssize_t WrappedLgetxattr(const char* path, const char* name, void* va
         errno = ENOENT;
         return -1;
     }
-    auto fn =
-        reinterpret_cast<ssize_t (*)(const char*, const char*, void*, size_t)>(gOriginalLgetxattr);
+    const auto fn = gOriginalLgetxattr.get();
     if (fn) {
         return fn(path, name, value, size);
     }
@@ -1568,7 +1553,7 @@ extern "C" int WrappedMkdirLibc(const char* path, mode_t mode) {
         errno = EACCES;
         return -1;
     }
-    auto fn = reinterpret_cast<int (*)(const char*, mode_t)>(gOriginalMkdir);
+    const auto fn = gOriginalMkdir.get();
     if (fn) {
         const int ret = fn(path, mode);
         if (ret == 0 && gActiveCreateScopeDepth != 0 && PathHasVisibleRootParent(pathView)) {
@@ -1592,7 +1577,7 @@ extern "C" int WrappedMknod(const char* path, mode_t mode, dev_t dev) {
         errno = EPERM;
         return -1;
     }
-    auto fn = reinterpret_cast<int (*)(const char*, mode_t, dev_t)>(gOriginalMknod);
+    const auto fn = gOriginalMknod.get();
     if (fn) {
         const int ret = fn(path, mode, dev);
         if (ret == 0 && gActiveCreateScopeDepth != 0 && PathHasVisibleRootParent(pathView)) {
@@ -1626,7 +1611,7 @@ extern "C" int WrappedOpen(const char* path, int flags, ...) {
         errno = EPERM;
         return -1;
     }
-    auto fn = reinterpret_cast<int (*)(const char*, int, ...)>(gOriginalOpen);
+    const auto fn = gOriginalOpen.get();
     if (fn) {
         if ((flags & O_CREAT) != 0) {
             const int ret = fn(path, flags, mode);
@@ -1656,7 +1641,7 @@ extern "C" int WrappedOpen2(const char* path, int flags) {
         errno = EPERM;
         return -1;
     }
-    auto fn = reinterpret_cast<int (*)(const char*, int)>(gOriginalOpen2);
+    const auto fn = gOriginalOpen2.get();
     if (fn) {
         const int ret = fn(path, flags);
         if (ret >= 0 && (flags & O_CREAT) != 0 && gActiveCreateScopeDepth != 0 &&
@@ -1691,7 +1676,8 @@ void ClearHiddenPathClassificationCache() {
 
 // Mirror the original app-accessible gate: sanitize only when needed, then delegate.
 bool WrappedIsAppAccessiblePath(void* fuse, AbiStringParam pathArg, uint32_t uid) {
-    if (gOriginalIsAppAccessiblePath == nullptr) {
+    const auto original = gOriginalIsAppAccessiblePath.get();
+    if (original == nullptr) {
         return false;
     }
     const std::string_view path = AbiStringView(pathArg);
@@ -1709,7 +1695,7 @@ bool WrappedIsAppAccessiblePath(void* fuse, AbiStringParam pathArg, uint32_t uid
                           DebugPreview(path).c_str());
             return false;
         }
-        return gOriginalIsAppAccessiblePath(fuse, pathArg, uid);
+        return original(fuse, pathArg, uid);
     }
     std::string sanitized(path);
     UnicodePolicy::RewriteString(sanitized);
@@ -1725,12 +1711,13 @@ bool WrappedIsAppAccessiblePath(void* fuse, AbiStringParam pathArg, uint32_t uid
         return false;
     }
     const ScopedAbiStringParam sanitizedArg(sanitized);
-    return gOriginalIsAppAccessiblePath(fuse, sanitizedArg.get(), uid);
+    return original(fuse, sanitizedArg.get(), uid);
 }
 
 // The package-owned helper only sanitizes the first path argument on the device build.
 bool WrappedIsPackageOwnedPath(AbiStringParam lhsArg, AbiStringParam rhsArg) {
-    if (gOriginalIsPackageOwnedPath == nullptr) {
+    const auto original = gOriginalIsPackageOwnedPath.get();
+    if (original == nullptr) {
         return false;
     }
     const std::string_view lhs = AbiStringView(lhsArg);
@@ -1742,7 +1729,7 @@ bool WrappedIsPackageOwnedPath(AbiStringParam lhsArg, AbiStringParam rhsArg) {
             DebugLogPrint(3, "package_owned direct lhs=%s rhs=%s", DebugPreview(lhs).c_str(),
                           DebugPreview(rhs).c_str());
         }
-        return gOriginalIsPackageOwnedPath(lhsArg, rhsArg);
+        return original(lhsArg, rhsArg);
     }
     std::string sanitizedLhs(lhs);
     UnicodePolicy::RewriteString(sanitizedLhs);
@@ -1751,12 +1738,13 @@ bool WrappedIsPackageOwnedPath(AbiStringParam lhsArg, AbiStringParam rhsArg) {
                       DebugPreview(sanitizedLhs).c_str(), DebugPreview(rhs).c_str());
     }
     const ScopedAbiStringParam sanitizedArg(sanitizedLhs);
-    return gOriginalIsPackageOwnedPath(sanitizedArg.get(), rhsArg);
+    return original(sanitizedArg.get(), rhsArg);
 }
 
 // WrappedIsBpfBackingPath
 bool WrappedIsBpfBackingPath(AbiStringParam pathArg) {
-    if (gOriginalIsBpfBackingPath == nullptr) {
+    const auto original = gOriginalIsBpfBackingPath.get();
+    if (original == nullptr) {
         return false;
     }
     const std::string_view path = AbiStringView(pathArg);
@@ -1766,7 +1754,7 @@ bool WrappedIsBpfBackingPath(AbiStringParam pathArg) {
         if (ShouldLogLimited(gBpfBackingLogCount)) {
             DebugLogPrint(3, "bpf_backing direct path=%s", DebugPreview(path).c_str());
         }
-        return gOriginalIsBpfBackingPath(pathArg);
+        return original(pathArg);
     }
     std::string sanitized(path);
     UnicodePolicy::RewriteString(sanitized);
@@ -1775,7 +1763,7 @@ bool WrappedIsBpfBackingPath(AbiStringParam pathArg) {
                       DebugPreview(sanitized).c_str());
     }
     const ScopedAbiStringParam sanitizedArg(sanitized);
-    return gOriginalIsBpfBackingPath(sanitizedArg.get());
+    return original(sanitizedArg.get());
 }
 
 // Keep libc strcasecmp behavior aligned with the original case-folding compare.

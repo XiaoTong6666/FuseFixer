@@ -17,39 +17,39 @@
 namespace fusehide {
 
 // Hook state for libfuse_jni.so running inside the MediaProvider process.
-void* gOriginalPfLookup = nullptr;
-void* gOriginalPfLookupPostfilter = nullptr;
-void* gOriginalPfAccess = nullptr;
-void* gOriginalPfOpen = nullptr;
-void* gOriginalPfOpendir = nullptr;
-void* gOriginalPfMknod = nullptr;
-void* gOriginalPfMkdir = nullptr;
-void* gOriginalPfUnlink = nullptr;
-void* gOriginalPfRmdir = nullptr;
-void* gOriginalPfRename = nullptr;
-void* gOriginalPfCreate = nullptr;
-void* gOriginalPfReaddir = nullptr;
-void* gOriginalPfReaddirPostfilter = nullptr;
-void* gOriginalPfReaddirplus = nullptr;
-void* gOriginalDoReaddirCommon = nullptr;
-void* gOriginalPfGetattr = nullptr;
-void* gOriginalOpen = nullptr;
-void* gOriginalOpen2 = nullptr;
-void* gOriginalMkdir = nullptr;
-void* gOriginalMknod = nullptr;
-void* gOriginalLstat = nullptr;
-void* gOriginalStat = nullptr;
-void* gOriginalGetxattr = nullptr;
-void* gOriginalLgetxattr = nullptr;
-void* gOriginalShouldNotCache = nullptr;
-void* gOriginalNotifyInvalEntry = nullptr;
-void* gOriginalNotifyInvalInode = nullptr;
-void* gOriginalReplyAttr = nullptr;
-void* gOriginalReplyEntry = nullptr;
-void* gOriginalReplyBuf = nullptr;
-void* gOriginalReplyErr = nullptr;
-void* gOriginalGetDirectoryEntries = nullptr;
-void* gOriginalAddDirectoryEntriesFromLowerFs = nullptr;
+HookOriginal<PfLookupFn> gOriginalPfLookup;
+HookOriginal<PfLookupPostfilterFn> gOriginalPfLookupPostfilter;
+HookOriginal<PfAccessFn> gOriginalPfAccess;
+HookOriginal<PfFileInfoFn> gOriginalPfOpen;
+HookOriginal<PfFileInfoFn> gOriginalPfOpendir;
+HookOriginal<PfMknodFn> gOriginalPfMknod;
+HookOriginal<PfMkdirFn> gOriginalPfMkdir;
+HookOriginal<PfRemoveFn> gOriginalPfUnlink;
+HookOriginal<PfRemoveFn> gOriginalPfRmdir;
+HookOriginal<PfRenameFn> gOriginalPfRename;
+HookOriginal<PfCreateFn> gOriginalPfCreate;
+HookOriginal<PfReaddirFn> gOriginalPfReaddir;
+HookOriginal<PfReaddirPostfilterFn> gOriginalPfReaddirPostfilter;
+HookOriginal<PfReaddirFn> gOriginalPfReaddirplus;
+HookOriginal<DoReaddirCommonFn> gOriginalDoReaddirCommon;
+HookOriginal<PfFileInfoFn> gOriginalPfGetattr;
+HookOriginal<LibcOpenFn> gOriginalOpen;
+HookOriginal<LibcOpen2Fn> gOriginalOpen2;
+HookOriginal<LibcMkdirFn> gOriginalMkdir;
+HookOriginal<LibcMknodFn> gOriginalMknod;
+HookOriginal<LibcStatFn> gOriginalLstat;
+HookOriginal<LibcStatFn> gOriginalStat;
+HookOriginal<LibcXattrFn> gOriginalGetxattr;
+HookOriginal<LibcXattrFn> gOriginalLgetxattr;
+HookOriginal<ShouldNotCacheFn> gOriginalShouldNotCache;
+HookOriginal<NotifyInvalEntryFn> gOriginalNotifyInvalEntry;
+HookOriginal<NotifyInvalInodeFn> gOriginalNotifyInvalInode;
+HookOriginal<FuseReplyAttrFn> gOriginalReplyAttr;
+HookOriginal<FuseReplyEntryFn> gOriginalReplyEntry;
+HookOriginal<FuseReplyBufFn> gOriginalReplyBuf;
+HookOriginal<FuseReplyErrFn> gOriginalReplyErr;
+HookOriginal<GetDirectoryEntriesFn> gOriginalGetDirectoryEntries;
+HookOriginal<AddDirectoryEntriesFromLowerFsFn> gOriginalAddDirectoryEntriesFromLowerFs;
 std::atomic<void*> gLastFuseSession{nullptr};
 std::atomic<bool> gHiddenEntryInvalidationPending{false};
 std::atomic<uint64_t> gHiddenRootParentInode{0};
@@ -89,7 +89,7 @@ void LogFallbackFailure(const char* caller) {
 }  // namespace
 
 FuseReplyErrFn Original() {
-    return reinterpret_cast<FuseReplyErrFn>(gOriginalReplyErr);
+    return gOriginalReplyErr.get();
 }
 
 FuseReplyErrFn Resolve() {
@@ -314,8 +314,7 @@ void RuntimeState::RememberFuseSession(fuse_req_t req) {
 // Shared dentry cache is not scoped per uid. Once another app resolves the hidden entry, the
 // target uid can reuse that positive cache unless we actively invalidate the root dentry.
 void RuntimeState::ScheduleHiddenEntryInvalidation() {
-    auto notifyEntry =
-        reinterpret_cast<int (*)(void*, uint64_t, const char*, size_t)>(gOriginalNotifyInvalEntry);
+    const auto notifyEntry = gOriginalNotifyInvalEntry.get();
     void* session = CurrentSchedulingFuseSession();
     if (notifyEntry == nullptr || session == nullptr) {
         return;
@@ -365,8 +364,7 @@ void RuntimeState::ScheduleHiddenEntryInvalidation() {
 }
 
 void RuntimeState::ScheduleSpecificEntryInvalidation(uint64_t parent, std::string_view name) {
-    auto notifyEntry =
-        reinterpret_cast<int (*)(void*, uint64_t, const char*, size_t)>(gOriginalNotifyInvalEntry);
+    const auto notifyEntry = gOriginalNotifyInvalEntry.get();
     void* session = CurrentSchedulingFuseSession();
     if (notifyEntry == nullptr || session == nullptr || parent == 0 || name.empty()) {
         return;
@@ -382,8 +380,7 @@ void RuntimeState::ScheduleSpecificEntryInvalidation(uint64_t parent, std::strin
 
 // Track subtree inodes so later getattr/readdir replies can also be forced uncached.
 void RuntimeState::ScheduleHiddenInodeInvalidation(uint64_t ino) {
-    auto notifyInode =
-        reinterpret_cast<int (*)(void*, uint64_t, off_t, off_t)>(gOriginalNotifyInvalInode);
+    const auto notifyInode = gOriginalNotifyInvalInode.get();
     void* session = CurrentSchedulingFuseSession();
     if (notifyInode == nullptr || session == nullptr || ino == 0) {
         return;
@@ -630,7 +627,7 @@ extern "C" bool WrappedShouldNotCache(void* fuse, AbiStringParam pathArg) {
         DebugLogPrint(4, "force uncached subtree path=%s", DebugPreview(path).c_str());
         return true;
     }
-    auto fn = reinterpret_cast<ShouldNotCacheFn>(gOriginalShouldNotCache);
+    const auto fn = gOriginalShouldNotCache.get();
     return fn ? fn(fuse, pathArg) : false;
 }
 

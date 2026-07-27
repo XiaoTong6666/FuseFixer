@@ -45,6 +45,8 @@
 #include <utility>
 #include <vector>
 
+#include "fusehide/hooks/hook_abi.hpp"
+
 struct fuse_session {};
 struct fuse_req {
     struct fuse_session* se;
@@ -149,6 +151,9 @@ using IsAppAccessiblePathFn = bool (*)(void* fuse, AbiStringParam path, uint32_t
 using IsPackageOwnedPathFn = bool (*)(AbiStringParam lhs, AbiStringParam rhs);
 using IsBpfBackingPathFn = bool (*)(AbiStringParam path);
 using ShouldNotCacheFn = bool (*)(void* fuse, AbiStringParam path);
+using StrcasecmpFn = int (*)(const char* lhs, const char* rhs);
+using EqualsIgnoreCaseAbiFn = bool (*)(const char* lhsData, size_t lhsSize, const char* rhsData,
+                                       size_t rhsSize);
 using FuseReplyErrFn = int (*)(fuse_req_t, int);
 using DirectoryEntries = std::vector<std::shared_ptr<mediaprovider::fuse::DirectoryEntry>>;
 using GetDirectoryEntriesFn = DirectoryEntries (*)(void* wrapper, uint32_t uid, AbiStringParam path,
@@ -156,6 +161,39 @@ using GetDirectoryEntriesFn = DirectoryEntries (*)(void* wrapper, uint32_t uid, 
 using LowerFsDirentFilterFn = bool (*)(const dirent& entry);
 using AddDirectoryEntriesFromLowerFsFn = void (*)(DIR* dirp, LowerFsDirentFilterFn filter,
                                                   DirectoryEntries* entries);
+using PfLookupFn = void (*)(fuse_req_t req, uint64_t parent, const char* name);
+using PfLookupPostfilterFn = void (*)(fuse_req_t req, uint64_t parent, uint32_t errorIn,
+                                      const char* name, fuse_entry_out* entryOut,
+                                      fuse_entry_bpf_out* bpfOut);
+using PfAccessFn = void (*)(fuse_req_t req, uint64_t ino, int mask);
+using PfFileInfoFn = void (*)(fuse_req_t req, uint64_t ino, void* fileInfo);
+using PfMkdirFn = void (*)(fuse_req_t req, uint64_t parent, const char* name, uint32_t mode);
+using PfMknodFn = void (*)(fuse_req_t req, uint64_t parent, const char* name, uint32_t mode,
+                           uint64_t device);
+using PfRemoveFn = void (*)(fuse_req_t req, uint64_t parent, const char* name);
+using PfRenameFn = void (*)(fuse_req_t req, uint64_t parent, const char* name, uint64_t newParent,
+                            const char* newName, uint32_t flags);
+using PfCreateFn = void (*)(fuse_req_t req, uint64_t parent, const char* name, uint32_t mode,
+                            void* fileInfo);
+using PfReaddirFn = void (*)(fuse_req_t req, uint64_t ino, size_t size, off_t offset,
+                             void* fileInfo);
+using PfReaddirPostfilterFn = void (*)(fuse_req_t req, uint64_t ino, uint32_t errorIn,
+                                       off_t offsetIn, off_t offsetOut, size_t sizeOut,
+                                       const void* direntsIn, void* fileInfo);
+using DoReaddirCommonFn = void (*)(fuse_req_t req, uint64_t ino, size_t size, off_t offset,
+                                   void* fileInfo, bool plus);
+using NotifyInvalEntryFn = int (*)(void* session, uint64_t parent, const char* name,
+                                   size_t nameLen);
+using NotifyInvalInodeFn = int (*)(void* session, uint64_t ino, off_t offset, off_t length);
+using FuseReplyEntryFn = int (*)(fuse_req_t req, const fuse_entry_param* entry);
+using FuseReplyAttrFn = int (*)(fuse_req_t req, const struct stat* attr, double timeout);
+using FuseReplyBufFn = int (*)(fuse_req_t req, const char* buffer, size_t size);
+using LibcStatFn = int (*)(const char* path, struct stat* statBuffer);
+using LibcXattrFn = ssize_t (*)(const char* path, const char* name, void* value, size_t size);
+using LibcMkdirFn = int (*)(const char* path, mode_t mode);
+using LibcMknodFn = int (*)(const char* path, mode_t mode, dev_t device);
+using LibcOpenFn = int (*)(const char* path, int flags, ...);
+using LibcOpen2Fn = int (*)(const char* path, int flags);
 
 #if defined(__x86_64__) || defined(__i386__)
 inline std::string_view AbiStringView(AbiStringParam raw) {
@@ -419,11 +457,11 @@ extern HookInstaller gHookInstaller;
 extern JavaVM* gJavaVm;
 extern UHasBinaryPropertyFn gUHasBinaryProperty;
 extern std::once_flag gXzCrcInitOnce;
-extern IsAppAccessiblePathFn gOriginalIsAppAccessiblePath;
-extern IsPackageOwnedPathFn gOriginalIsPackageOwnedPath;
-extern IsBpfBackingPathFn gOriginalIsBpfBackingPath;
-extern void* gOriginalStrcasecmp;
-extern void* gOriginalEqualsIgnoreCase;
+extern HookOriginal<IsAppAccessiblePathFn> gOriginalIsAppAccessiblePath;
+extern HookOriginal<IsPackageOwnedPathFn> gOriginalIsPackageOwnedPath;
+extern HookOriginal<IsBpfBackingPathFn> gOriginalIsBpfBackingPath;
+extern HookOriginal<StrcasecmpFn> gOriginalStrcasecmp;
+extern HookOriginal<EqualsIgnoreCaseAbiFn> gOriginalEqualsIgnoreCase;
 
 extern std::atomic<int> gAppAccessibleLogCount;
 extern std::atomic<int> gPackageOwnedLogCount;
@@ -505,39 +543,39 @@ void RewriteString(std::string& input);
 int CompareCaseFoldIgnoringDefaultIgnorables(const uint8_t* lhsData, size_t lhsLen,
                                              const uint8_t* rhsData, size_t rhsLen);
 
-extern void* gOriginalPfLookup;
-extern void* gOriginalPfLookupPostfilter;
-extern void* gOriginalPfAccess;
-extern void* gOriginalPfOpen;
-extern void* gOriginalPfOpendir;
-extern void* gOriginalPfMknod;
-extern void* gOriginalPfMkdir;
-extern void* gOriginalPfUnlink;
-extern void* gOriginalPfRmdir;
-extern void* gOriginalPfRename;
-extern void* gOriginalPfCreate;
-extern void* gOriginalPfReaddir;
-extern void* gOriginalPfReaddirPostfilter;
-extern void* gOriginalPfReaddirplus;
-extern void* gOriginalDoReaddirCommon;
-extern void* gOriginalPfGetattr;
-extern void* gOriginalOpen;
-extern void* gOriginalOpen2;
-extern void* gOriginalMkdir;
-extern void* gOriginalMknod;
-extern void* gOriginalLstat;
-extern void* gOriginalStat;
-extern void* gOriginalGetxattr;
-extern void* gOriginalLgetxattr;
-extern void* gOriginalShouldNotCache;
-extern void* gOriginalNotifyInvalEntry;
-extern void* gOriginalNotifyInvalInode;
-extern void* gOriginalReplyAttr;
-extern void* gOriginalReplyEntry;
-extern void* gOriginalReplyBuf;
-extern void* gOriginalReplyErr;
-extern void* gOriginalGetDirectoryEntries;
-extern void* gOriginalAddDirectoryEntriesFromLowerFs;
+extern HookOriginal<PfLookupFn> gOriginalPfLookup;
+extern HookOriginal<PfLookupPostfilterFn> gOriginalPfLookupPostfilter;
+extern HookOriginal<PfAccessFn> gOriginalPfAccess;
+extern HookOriginal<PfFileInfoFn> gOriginalPfOpen;
+extern HookOriginal<PfFileInfoFn> gOriginalPfOpendir;
+extern HookOriginal<PfMknodFn> gOriginalPfMknod;
+extern HookOriginal<PfMkdirFn> gOriginalPfMkdir;
+extern HookOriginal<PfRemoveFn> gOriginalPfUnlink;
+extern HookOriginal<PfRemoveFn> gOriginalPfRmdir;
+extern HookOriginal<PfRenameFn> gOriginalPfRename;
+extern HookOriginal<PfCreateFn> gOriginalPfCreate;
+extern HookOriginal<PfReaddirFn> gOriginalPfReaddir;
+extern HookOriginal<PfReaddirPostfilterFn> gOriginalPfReaddirPostfilter;
+extern HookOriginal<PfReaddirFn> gOriginalPfReaddirplus;
+extern HookOriginal<DoReaddirCommonFn> gOriginalDoReaddirCommon;
+extern HookOriginal<PfFileInfoFn> gOriginalPfGetattr;
+extern HookOriginal<LibcOpenFn> gOriginalOpen;
+extern HookOriginal<LibcOpen2Fn> gOriginalOpen2;
+extern HookOriginal<LibcMkdirFn> gOriginalMkdir;
+extern HookOriginal<LibcMknodFn> gOriginalMknod;
+extern HookOriginal<LibcStatFn> gOriginalLstat;
+extern HookOriginal<LibcStatFn> gOriginalStat;
+extern HookOriginal<LibcXattrFn> gOriginalGetxattr;
+extern HookOriginal<LibcXattrFn> gOriginalLgetxattr;
+extern HookOriginal<ShouldNotCacheFn> gOriginalShouldNotCache;
+extern HookOriginal<NotifyInvalEntryFn> gOriginalNotifyInvalEntry;
+extern HookOriginal<NotifyInvalInodeFn> gOriginalNotifyInvalInode;
+extern HookOriginal<FuseReplyAttrFn> gOriginalReplyAttr;
+extern HookOriginal<FuseReplyEntryFn> gOriginalReplyEntry;
+extern HookOriginal<FuseReplyBufFn> gOriginalReplyBuf;
+extern HookOriginal<FuseReplyErrFn> gOriginalReplyErr;
+extern HookOriginal<GetDirectoryEntriesFn> gOriginalGetDirectoryEntries;
+extern HookOriginal<AddDirectoryEntriesFromLowerFsFn> gOriginalAddDirectoryEntriesFromLowerFs;
 extern std::atomic<void*> gLastFuseSession;
 extern std::atomic<bool> gHiddenEntryInvalidationPending;
 extern std::atomic<uint64_t> gHiddenRootParentInode;

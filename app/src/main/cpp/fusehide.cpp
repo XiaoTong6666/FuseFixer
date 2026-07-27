@@ -21,11 +21,11 @@ UHasBinaryPropertyFn gUHasBinaryProperty = u_hasBinaryProperty;
 HookInstaller gHookInstaller = nullptr;
 JavaVM* gJavaVm = nullptr;
 std::once_flag gXzCrcInitOnce;
-IsAppAccessiblePathFn gOriginalIsAppAccessiblePath = nullptr;
-IsPackageOwnedPathFn gOriginalIsPackageOwnedPath = nullptr;
-IsBpfBackingPathFn gOriginalIsBpfBackingPath = nullptr;
-void* gOriginalStrcasecmp = nullptr;
-void* gOriginalEqualsIgnoreCase = nullptr;
+HookOriginal<IsAppAccessiblePathFn> gOriginalIsAppAccessiblePath;
+HookOriginal<IsPackageOwnedPathFn> gOriginalIsPackageOwnedPath;
+HookOriginal<IsBpfBackingPathFn> gOriginalIsBpfBackingPath;
+HookOriginal<StrcasecmpFn> gOriginalStrcasecmp;
+HookOriginal<EqualsIgnoreCaseAbiFn> gOriginalEqualsIgnoreCase;
 
 std::atomic<int> gAppAccessibleLogCount{0};
 std::atomic<int> gPackageOwnedLogCount{0};
