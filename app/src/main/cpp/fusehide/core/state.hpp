@@ -163,12 +163,18 @@ using FuseReplyErrFn = int (*)(fuse_req_t, int);
 using DirectoryEntries = std::vector<std::shared_ptr<mediaprovider::fuse::DirectoryEntry>>;
 // The supplied API 37 DEV sample changes the element representation to an inline DirectoryEntry.
 using ValueDirectoryEntries = std::vector<mediaprovider::fuse::DirectoryEntry>;
+struct CachedDirectorySnapshotEntry {
+    std::string name;
+    int type = 0;
+};
+using CachedValueDirectoryEntries = std::vector<CachedDirectorySnapshotEntry>;
 inline constexpr size_t kExpectedDirectoryEntryAbiSize =
     (sizeof(std::string) + sizeof(int) + alignof(std::string) - 1) & ~(alignof(std::string) - 1);
 static_assert(sizeof(std::shared_ptr<mediaprovider::fuse::DirectoryEntry>) == 2 * sizeof(void*));
 static_assert(sizeof(mediaprovider::fuse::DirectoryEntry) == kExpectedDirectoryEntryAbiSize);
 static_assert(sizeof(DirectoryEntries) == 3 * sizeof(void*));
 static_assert(sizeof(ValueDirectoryEntries) == 3 * sizeof(void*));
+static_assert(sizeof(CachedValueDirectoryEntries) == 3 * sizeof(void*));
 using GetDirectoryEntriesFn = DirectoryEntries (*)(void* wrapper, uint32_t uid, AbiStringParam path,
                                                    DIR* dirp);
 using GetValueDirectoryEntriesFn = ValueDirectoryEntries (*)(void* wrapper, uint32_t uid,

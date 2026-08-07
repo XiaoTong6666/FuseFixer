@@ -85,7 +85,7 @@ struct RootSnapshotCacheEntry {
     uint64_t parentGeneration = 0;
     std::shared_ptr<const CompiledHideRule> rule;
     std::shared_ptr<const DirectoryEntries> sharedEntries;
-    std::shared_ptr<const ValueDirectoryEntries> valueEntries;
+    std::shared_ptr<const CachedValueDirectoryEntries> valueSnapshot;
 };
 
 constexpr size_t kMaxHiddenPathClassificationCacheEntries = 4096;
@@ -343,16 +343,30 @@ Entries CloneDirectoryEntries(const Entries& entries) {
     return Entries(entries.begin(), entries.end());
 }
 
+CachedValueDirectoryEntries SnapshotValueDirectoryEntries(const ValueDirectoryEntries& entries) {
+    // Ghidra for the API 37 sample shows do_readdir_common consuming only DirectoryEntry::d_name
+    // and DirectoryEntry::d_type from the returned vector. Cache that semantic payload instead of
+    // holding a target-facing value-vector object across calls.
+    CachedValueDirectoryEntries snapshot;
+    snapshot.reserve(entries.size());
+    for (const auto& entry : entries) {
+        snapshot.push_back(CachedDirectorySnapshotEntry{entry.d_name, entry.d_type});
+    }
+    return snapshot;
+}
+
+ValueDirectoryEntries RebuildValueDirectoryEntries(const CachedValueDirectoryEntries& snapshot) {
+    ValueDirectoryEntries entries;
+    entries.reserve(snapshot.size());
+    for (const auto& entry : snapshot) {
+        entries.emplace_back(entry.name, entry.type);
+    }
+    return entries;
+}
+
 template <typename Entries>
 std::optional<Entries> LookupRootSnapshotCache(
     uint32_t uid, std::string_view path, const std::shared_ptr<const CompiledHideRule>& rule) {
-    if constexpr (std::is_same_v<Entries, ValueDirectoryEntries>) {
-        // A cache hit would return storage allocated by std::__ndk1 to a std::__1 caller. Keep the
-        // value-vector bridge limited to the filtering call itself until that ownership transfer is
-        // verified on-device under repeated enumeration and memory pressure.
-        return std::nullopt;
-    }
-
     const std::string canonicalPath = CanonicalRootSnapshotPath(path);
     if (canonicalPath.empty()) {
         return std::nullopt;
@@ -380,7 +394,7 @@ std::optional<Entries> LookupRootSnapshotCache(
         if constexpr (std::is_same_v<Entries, DirectoryEntries>) {
             return it->second.sharedEntries;
         } else {
-            return it->second.valueEntries;
+            return it->second.valueSnapshot;
         }
     }();
     if (it->second.configGeneration != configGeneration ||
@@ -417,17 +431,20 @@ std::optional<Entries> LookupRootSnapshotCache(
                   static_cast<unsigned long long>(configGeneration),
                   static_cast<unsigned long long>(packageSetGeneration),
                   static_cast<unsigned long long>(parentGeneration));
-    return CloneDirectoryEntries(*snapshot);
+    if constexpr (std::is_same_v<Entries, DirectoryEntries>) {
+        return CloneDirectoryEntries(*snapshot);
+    } else {
+        // Cache only the semantic (name,type) payload for the value-vector ABI, then rebuild a
+        // fresh return object on every hit so the cache never owns a target-facing container
+        // instance.
+        return RebuildValueDirectoryEntries(*snapshot);
+    }
 }
 
 template <typename Entries>
 void MaybeStoreRootSnapshotCache(uint32_t uid, std::string_view path,
                                  const std::shared_ptr<const CompiledHideRule>& rule,
                                  const Entries& entries) {
-    if constexpr (std::is_same_v<Entries, ValueDirectoryEntries>) {
-        return;
-    }
-
     const std::string canonicalPath = CanonicalRootSnapshotPath(path);
     if (canonicalPath.empty() || !CanCacheRootSnapshotEntries(entries)) {
         return;
@@ -437,7 +454,14 @@ void MaybeStoreRootSnapshotCache(uint32_t uid, std::string_view path,
     const uint64_t configGeneration = gHideConfigGeneration.load(std::memory_order_acquire);
     const uint64_t packageSetGeneration = gUidPackageSetGeneration.load(std::memory_order_acquire);
     const uint64_t parentGeneration = gRootSnapshotParentGeneration.load(std::memory_order_acquire);
-    auto snapshot = std::make_shared<const Entries>(CloneDirectoryEntries(entries));
+    auto snapshot = [&]() {
+        if constexpr (std::is_same_v<Entries, DirectoryEntries>) {
+            return std::make_shared<const Entries>(CloneDirectoryEntries(entries));
+        } else {
+            return std::make_shared<const CachedValueDirectoryEntries>(
+                SnapshotValueDirectoryEntries(entries));
+        }
+    }();
 
     std::lock_guard<std::mutex> lock(gRootSnapshotCacheMutex);
     // Recheck all generations after the expensive directory read/filter work so a concurrent rule
@@ -452,7 +476,7 @@ void MaybeStoreRootSnapshotCache(uint32_t uid, std::string_view path,
     if constexpr (std::is_same_v<Entries, DirectoryEntries>) {
         cacheEntry.sharedEntries = std::move(snapshot);
     } else {
-        cacheEntry.valueEntries = std::move(snapshot);
+        cacheEntry.valueSnapshot = std::move(snapshot);
     }
     gRootSnapshotCache.insert_or_assign(RootSnapshotCacheKey{uid, fingerprint, canonicalPath},
                                         std::move(cacheEntry));
