@@ -372,7 +372,26 @@ struct ResolvedHookFeatureOffsets {
     HookResolutionSource getDirectoryEntriesSource = HookResolutionSource::kProfileFallback;
     HookResolutionSource addDirectoryEntriesFromLowerFsSource =
         HookResolutionSource::kProfileFallback;
+    bool usesValueDirectoryEntries = false;
 };
+
+bool UsesValueDirectoryEntries(const ModuleInfo& module) {
+    std::optional<MappedFile> mapped;
+    if (module.path.find("!/") != std::string::npos) {
+        mapped = MapEmbeddedStoredElf(module.path);
+    } else {
+        mapped = MapReadOnlyFile(module.path, module.fileOffset);
+    }
+    if (!mapped.has_value()) {
+        return false;
+    }
+
+    const auto match = FindLargestSymbolContaining(*mapped, "addDirectoryEntriesFromLowerFs");
+    if (!match.has_value() || match->name.find("shared_ptr") != std::string::npos) {
+        return false;
+    }
+    return match->name.find("vectorINS0_14DirectoryEntry") != std::string::npos;
+}
 
 std::optional<uintptr_t> ResolveLargestSymbolOffsetContaining(const ModuleInfo& module,
                                                               std::string_view needle) {
@@ -476,6 +495,7 @@ struct DeviceHookInstallPlan {
     CriticalHookTargetPlan pfReaddir;
     CriticalHookTargetPlan pfReaddirPostfilter;
     CriticalHookTargetPlan pfReaddirplus;
+    bool supportsDirectoryEntryHooks = true;
 };
 
 bool TryInstallInlineHookAt(void* target, void* replacement, void** backup,
@@ -528,6 +548,7 @@ inline constexpr LayoutAnchorDescriptor kLayoutAnchorDescriptors[] = {
 
 ResolvedHookFeatureOffsets ResolveHookFeatureOffsets(const ModuleInfo& module) {
     ResolvedHookFeatureOffsets features;
+    features.usesValueDirectoryEntries = UsesValueDirectoryEntries(module);
     features.isAppAccessiblePathOffset =
         ResolveFirstAvailableSymbolOffset(module, kIsAppAccessiblePathSymbols);
     features.pfLookupOffset = ResolveFirstAvailableSymbolOffset(module, kPfLookupSymbols);
@@ -909,6 +930,14 @@ DeviceHookInstallPlan ResolveDeviceHookInstallPlan(const ModuleInfo& module) {
     installPlan.pfReaddirplus = BuildCriticalHookTargetPlan(
         installPlan.profile.pfReaddirplusOffset, features.pfReaddirplusOffset,
         features.pfReaddirplusSource, derivedFlags.pfReaddirplus);
+    installPlan.supportsDirectoryEntryHooks = !features.usesValueDirectoryEntries;
+
+    if (!installPlan.supportsDirectoryEntryHooks) {
+        __android_log_print(
+            5, kLogTag,
+            "skip directory entry hooks: MediaProvider uses vector<DirectoryEntry> ABI path=%s",
+            module.path.c_str());
+    }
 
     const int safeScore = std::max(bestScore, 0);
     if (resolvedCount == 0) {
@@ -1290,20 +1319,22 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
                                    &process.originalOpen, "open");
     InstallFileCompareHookIfNeeded(fileContext.elfInfo, "__open_2", "__open_2", (void*)WrappedOpen2,
                                    &process.originalOpen2, "__open_2");
-    if (process.originalGetDirectoryEntries == nullptr) {
+    if (installPlan.supportsDirectoryEntryHooks && process.originalGetDirectoryEntries == nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.getDirectoryEntries,
                                        "GetDirectoryEntries", (void*)WrappedGetDirectoryEntries,
                                        &process.originalGetDirectoryEntries,
                                        "hook GetDirectoryEntries failed");
     }
-    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
+    if (installPlan.supportsDirectoryEntryHooks &&
+        process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.addDirectoryEntriesFromLowerFs,
                                        "addDirectoryEntriesFromLowerFs",
                                        (void*)WrappedAddDirectoryEntriesFromLowerFs,
                                        &process.originalAddDirectoryEntriesFromLowerFs,
                                        "hook addDirectoryEntriesFromLowerFs failed");
     }
-    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
+    if (installPlan.supportsDirectoryEntryHooks &&
+        process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.addDirectoryEntriesFromLowerFsThunk,
                                        "addDirectoryEntriesFromLowerFsThunk",
                                        (void*)WrappedAddDirectoryEntriesFromLowerFs,
