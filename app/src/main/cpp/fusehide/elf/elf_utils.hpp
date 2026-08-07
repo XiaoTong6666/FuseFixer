@@ -77,11 +77,34 @@ inline constexpr std::string_view kDoReaddirCommonSymbols[] = {
 inline constexpr std::string_view kGetDirectoryEntriesSymbols[] = {
     "_ZN13mediaprovider4fuse20MediaProviderWrapper19GetDirectoryEntriesEjRKNSt6__ndk112basic_"
     "stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEEP3DIR",
+    "_ZN13mediaprovider4fuse20MediaProviderWrapper19GetDirectoryEntriesEjRKNSt3__112basic_"
+    "stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEEP3DIR",
+};
+
+// Keep both historical shared_ptr spellings. Some Android 17 x86_64 builds switched from
+// std::__ndk1 to std::__1 without changing the DirectoryEntry container itself.
+inline constexpr std::string_view kAddSharedDirectoryEntriesFromLowerFsSymbols[] = {
+    "_ZN13mediaprovider4fuse30addDirectoryEntriesFromLowerFsEP3DIRPFbRK6direntEPNSt6__"
+    "ndk16vectorINS8_10shared_ptrINS0_14DirectoryEntryEEENS8_9allocatorISC_EEEE",
+    "_ZN13mediaprovider4fuse30addDirectoryEntriesFromLowerFsEP3DIRPFbRK6direntEPNSt3__"
+    "16vectorINS8_10shared_ptrINS0_14DirectoryEntryEEENS8_9allocatorISC_EEEE",
+};
+
+// The supplied Google MediaProvider API 37 DEV sample exports the std::__1 value-vector spelling.
+// Unlike GetDirectoryEntries, this pointer parameter is encoded in the Itanium mangled name, so it
+// is the authoritative runtime discriminator for selecting the C++ container wrapper.
+inline constexpr std::string_view kAddValueDirectoryEntriesFromLowerFsSymbols[] = {
+    "_ZN13mediaprovider4fuse30addDirectoryEntriesFromLowerFsEP3DIRPFbRK6direntEPNSt3__"
+    "16vectorINS0_14DirectoryEntryENS8_9allocatorISA_EEEE",
+    "_ZN13mediaprovider4fuse30addDirectoryEntriesFromLowerFsEP3DIRPFbRK6direntEPNSt6__"
+    "ndk16vectorINS0_14DirectoryEntryENS8_9allocatorISA_EEEE",
 };
 
 inline constexpr std::string_view kAddDirectoryEntriesFromLowerFsSymbols[] = {
-    "_ZN13mediaprovider4fuse30addDirectoryEntriesFromLowerFsEP3DIRPFbRK6direntEPNSt6__"
-    "ndk16vectorINS8_10shared_ptrINS0_14DirectoryEntryEEENS8_9allocatorISC_EEEE",
+    kAddSharedDirectoryEntriesFromLowerFsSymbols[0],
+    kAddSharedDirectoryEntriesFromLowerFsSymbols[1],
+    kAddValueDirectoryEntriesFromLowerFsSymbols[0],
+    kAddValueDirectoryEntriesFromLowerFsSymbols[1],
 };
 
 inline constexpr std::string_view kPfLookupSymbols[] = {

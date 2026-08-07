@@ -19,10 +19,14 @@
 namespace fusehide {
 
 extern "C" bool WrappedShouldNotCache(void* fuse, AbiStringParam path);
-DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStringParam path,
-                                            DIR* dirp);
-void WrappedAddDirectoryEntriesFromLowerFs(DIR* dirp, LowerFsDirentFilterFn filter,
-                                           DirectoryEntries* entries);
+DirectoryEntries WrappedGetDirectoryEntriesShared(void* wrapper, uint32_t uid, AbiStringParam path,
+                                                  DIR* dirp);
+ValueDirectoryEntries WrappedGetDirectoryEntriesValue(void* wrapper, uint32_t uid,
+                                                      AbiStringParam path, DIR* dirp);
+void WrappedAddDirectoryEntriesFromLowerFsShared(DIR* dirp, LowerFsDirentFilterFn filter,
+                                                 DirectoryEntries* entries);
+void WrappedAddDirectoryEntriesFromLowerFsValue(DIR* dirp, LowerFsDirentFilterFn filter,
+                                                ValueDirectoryEntries* entries);
 extern "C" void WrappedPfLookup(fuse_req_t req, uint64_t parent, const char* name);
 extern "C" void WrappedPfReaddirPostfilter(fuse_req_t req, uint64_t ino, uint32_t error_in,
                                            off_t off_in, off_t off_out, size_t size_out,

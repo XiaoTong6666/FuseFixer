@@ -50,6 +50,7 @@ HookOriginal<FuseReplyBufFn> gOriginalReplyBuf;
 HookOriginal<FuseReplyErrFn> gOriginalReplyErr;
 HookOriginal<GetDirectoryEntriesFn> gOriginalGetDirectoryEntries;
 HookOriginal<AddDirectoryEntriesFromLowerFsFn> gOriginalAddDirectoryEntriesFromLowerFs;
+std::atomic<DirectoryEntriesAbi> gDirectoryEntriesAbi{DirectoryEntriesAbi::kUnknown};
 std::atomic<void*> gLastFuseSession{nullptr};
 std::atomic<bool> gHiddenEntryInvalidationPending{false};
 std::atomic<uint64_t> gHiddenRootParentInode{0};

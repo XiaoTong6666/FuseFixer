@@ -84,7 +84,8 @@ struct RootSnapshotCacheEntry {
     uint64_t packageSetGeneration = 0;
     uint64_t parentGeneration = 0;
     std::shared_ptr<const CompiledHideRule> rule;
-    std::shared_ptr<const DirectoryEntries> entries;
+    std::shared_ptr<const DirectoryEntries> sharedEntries;
+    std::shared_ptr<const ValueDirectoryEntries> valueEntries;
 };
 
 constexpr size_t kMaxHiddenPathClassificationCacheEntries = 4096;
@@ -333,12 +334,25 @@ bool CanCacheRootSnapshotEntries(const DirectoryEntries& entries) {
     return first != nullptr && !first->d_name.empty();
 }
 
-DirectoryEntries CloneDirectoryEntries(const DirectoryEntries& entries) {
-    return DirectoryEntries(entries.begin(), entries.end());
+bool CanCacheRootSnapshotEntries(const ValueDirectoryEntries& entries) {
+    return entries.empty() || !entries.front().d_name.empty();
 }
 
-std::optional<DirectoryEntries> LookupRootSnapshotCache(
+template <typename Entries>
+Entries CloneDirectoryEntries(const Entries& entries) {
+    return Entries(entries.begin(), entries.end());
+}
+
+template <typename Entries>
+std::optional<Entries> LookupRootSnapshotCache(
     uint32_t uid, std::string_view path, const std::shared_ptr<const CompiledHideRule>& rule) {
+    if constexpr (std::is_same_v<Entries, ValueDirectoryEntries>) {
+        // A cache hit would return storage allocated by std::__ndk1 to a std::__1 caller. Keep the
+        // value-vector bridge limited to the filtering call itself until that ownership transfer is
+        // verified on-device under repeated enumeration and memory pressure.
+        return std::nullopt;
+    }
+
     const std::string canonicalPath = CanonicalRootSnapshotPath(path);
     if (canonicalPath.empty()) {
         return std::nullopt;
@@ -362,9 +376,16 @@ std::optional<DirectoryEntries> LookupRootSnapshotCache(
                       static_cast<unsigned long long>(parentGeneration));
         return std::nullopt;
     }
+    const auto snapshot = [&]() {
+        if constexpr (std::is_same_v<Entries, DirectoryEntries>) {
+            return it->second.sharedEntries;
+        } else {
+            return it->second.valueEntries;
+        }
+    }();
     if (it->second.configGeneration != configGeneration ||
         it->second.packageSetGeneration != packageSetGeneration ||
-        it->second.parentGeneration != parentGeneration || it->second.entries == nullptr) {
+        it->second.parentGeneration != parentGeneration || snapshot == nullptr) {
         DebugLogPrint(4,
                       "cache root_snapshot miss uid=%u path=%s fingerprint=%llu reason=stale "
                       "cached_generation=%llu live_generation=%llu "
@@ -392,16 +413,21 @@ std::optional<DirectoryEntries> LookupRootSnapshotCache(
                   "cache root_snapshot hit uid=%u path=%s fingerprint=%llu entries=%zu "
                   "generation=%llu package_generation=%llu parent_generation=%llu",
                   static_cast<unsigned>(uid), DebugPreview(canonicalPath).c_str(),
-                  static_cast<unsigned long long>(fingerprint), it->second.entries->size(),
+                  static_cast<unsigned long long>(fingerprint), snapshot->size(),
                   static_cast<unsigned long long>(configGeneration),
                   static_cast<unsigned long long>(packageSetGeneration),
                   static_cast<unsigned long long>(parentGeneration));
-    return CloneDirectoryEntries(*it->second.entries);
+    return CloneDirectoryEntries(*snapshot);
 }
 
+template <typename Entries>
 void MaybeStoreRootSnapshotCache(uint32_t uid, std::string_view path,
                                  const std::shared_ptr<const CompiledHideRule>& rule,
-                                 const DirectoryEntries& entries) {
+                                 const Entries& entries) {
+    if constexpr (std::is_same_v<Entries, ValueDirectoryEntries>) {
+        return;
+    }
+
     const std::string canonicalPath = CanonicalRootSnapshotPath(path);
     if (canonicalPath.empty() || !CanCacheRootSnapshotEntries(entries)) {
         return;
@@ -411,7 +437,7 @@ void MaybeStoreRootSnapshotCache(uint32_t uid, std::string_view path,
     const uint64_t configGeneration = gHideConfigGeneration.load(std::memory_order_acquire);
     const uint64_t packageSetGeneration = gUidPackageSetGeneration.load(std::memory_order_acquire);
     const uint64_t parentGeneration = gRootSnapshotParentGeneration.load(std::memory_order_acquire);
-    auto snapshot = std::make_shared<const DirectoryEntries>(CloneDirectoryEntries(entries));
+    auto snapshot = std::make_shared<const Entries>(CloneDirectoryEntries(entries));
 
     std::lock_guard<std::mutex> lock(gRootSnapshotCacheMutex);
     // Recheck all generations after the expensive directory read/filter work so a concurrent rule
@@ -421,10 +447,15 @@ void MaybeStoreRootSnapshotCache(uint32_t uid, std::string_view path,
         gRootSnapshotParentGeneration.load(std::memory_order_acquire) != parentGeneration) {
         return;
     }
-    gRootSnapshotCache.insert_or_assign(
-        RootSnapshotCacheKey{uid, fingerprint, canonicalPath},
-        RootSnapshotCacheEntry{configGeneration, packageSetGeneration, parentGeneration, rule,
-                               std::move(snapshot)});
+    RootSnapshotCacheEntry cacheEntry{
+        configGeneration, packageSetGeneration, parentGeneration, rule, nullptr, nullptr};
+    if constexpr (std::is_same_v<Entries, DirectoryEntries>) {
+        cacheEntry.sharedEntries = std::move(snapshot);
+    } else {
+        cacheEntry.valueEntries = std::move(snapshot);
+    }
+    gRootSnapshotCache.insert_or_assign(RootSnapshotCacheKey{uid, fingerprint, canonicalPath},
+                                        std::move(cacheEntry));
     DebugLogPrint(4,
                   "cache root_snapshot store uid=%u path=%s fingerprint=%llu entries=%zu "
                   "generation=%llu package_generation=%llu parent_generation=%llu",
@@ -580,11 +611,23 @@ extern "C" void WrappedPfLookup(fuse_req_t req, uint64_t parent, const char* nam
     gTrackRootHiddenLookup = false;
 }
 
+bool ShouldFilterDirectoryEntry(uint32_t uid, std::string_view parentPath, std::string_view name) {
+    return !name.empty() && name[0] != '/' &&
+           HiddenPathPolicy::ShouldHideTestPath(
+               uid, HiddenPathPolicy::JoinPathComponent(parentPath, name));
+}
+
 // MediaProviderWrapper::GetDirectoryEntries() appends lower-fs directory names after the Java-side
 // list is fetched, so root entry hiding must also filter the native vector here.
 // AOSP references: jni/MediaProviderWrapper.cpp#373 and jni/FuseDaemon.cpp#1882
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/MediaProviderWrapper.cpp#373
 // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#1882
+//
+// Supplied API 37 DEV sample Ghidra evidence (arm64 image base 0x00100000):
+// GetDirectoryEntries @ 0x001749e0 and addDirectoryEntriesFromLowerFs @ 0x00176620 operate on
+// vector<DirectoryEntry>, while do_readdir_common @ 0x0016a9d0 advances elements by 0x20 and reads
+// d_type at +0x18. The legacy AOSP path above advances vector<shared_ptr<DirectoryEntry>> elements,
+// so retain separate overloads rather than interpreting one representation as the other.
 DirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view parentPath,
                                               DirectoryEntries entries) {
     if (!HiddenPathPolicy::IsTestHiddenUid(uid) || entries.empty()) {
@@ -598,12 +641,7 @@ DirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view par
                                          return false;
                                      }
                                      const std::string& name = entry->d_name;
-                                     if (name.empty() || name[0] == '/') {
-                                         return false;
-                                     }
-                                     return HiddenPathPolicy::ShouldHideTestPath(
-                                         uid,
-                                         HiddenPathPolicy::JoinPathComponent(parentPath, name));
+                                     return ShouldFilterDirectoryEntry(uid, parentPath, name);
                                  }),
                   entries.end());
 
@@ -615,9 +653,47 @@ DirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view par
     return entries;
 }
 
-DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStringParam pathArg,
-                                            DIR* dirp) {
-    const auto fn = gOriginalGetDirectoryEntries.get();
+ValueDirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view parentPath,
+                                                   ValueDirectoryEntries entries) {
+    if (!HiddenPathPolicy::IsTestHiddenUid(uid) || entries.empty()) {
+        return entries;
+    }
+
+    const size_t before = entries.size();
+    size_t firstHidden = 0;
+    while (firstHidden < before &&
+           !ShouldFilterDirectoryEntry(uid, parentPath, entries[firstHidden].d_name)) {
+        ++firstHidden;
+    }
+    if (firstHidden == before) {
+        return entries;
+    }
+
+    // Build a new value vector instead of applying the legacy shared_ptr erase path. The returned
+    // object is handed back across the platform libc++ boundary and must retain 0x20-byte elements.
+    ValueDirectoryEntries filtered;
+    filtered.reserve(before - 1);
+    for (size_t index = 0; index < firstHidden; ++index) {
+        const auto& entry = entries[index];
+        filtered.emplace_back(entry.d_name, entry.d_type);
+    }
+    for (size_t index = firstHidden + 1; index < before; ++index) {
+        const auto& entry = entries[index];
+        if (!ShouldFilterDirectoryEntry(uid, parentPath, entry.d_name)) {
+            filtered.emplace_back(entry.d_name, entry.d_type);
+        }
+    }
+    if (filtered.size() != before) {
+        DebugLogPrint(4, "filter value dir entries uid=%u parent=%s removed=%zu remaining=%zu",
+                      static_cast<unsigned>(uid), DebugPreview(parentPath).c_str(),
+                      before - filtered.size(), filtered.size());
+    }
+    return filtered;
+}
+
+template <typename Entries, typename OriginalFn>
+Entries WrappedGetDirectoryEntriesForAbi(OriginalFn fn, void* wrapper, uint32_t uid,
+                                         AbiStringParam pathArg, DIR* dirp) {
     const std::string path(AbiStringView(pathArg));
     // Cache only the already-filtered visible root listing. Nested directories still rely on the
     // normal tracked-path invalidation path because their visibility is not just a root child set.
@@ -641,16 +717,16 @@ DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStri
     }
 
     if (dirp != nullptr) {
-        if (auto cachedEntries = LookupRootSnapshotCache(uid, path, rule);
+        if (auto cachedEntries = LookupRootSnapshotCache<Entries>(uid, path, rule);
             cachedEntries.has_value()) {
             return std::move(*cachedEntries);
         }
     }
 
-    DirectoryEntries entries;
+    Entries entries;
     {
         const ScopedPathPolicyContext scopedPath(uid, path);
-        entries = fn ? fn(wrapper, uid, pathArg, dirp) : DirectoryEntries();
+        entries = fn ? fn(wrapper, uid, pathArg, dirp) : Entries();
     }
     entries = FilterHiddenDirectoryEntries(uid, path, std::move(entries));
     if (dirp != nullptr && fn != nullptr) {
@@ -659,9 +735,22 @@ DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStri
     return entries;
 }
 
-void WrappedAddDirectoryEntriesFromLowerFs(DIR* dirp, LowerFsDirentFilterFn filter,
-                                           DirectoryEntries* entries) {
-    const auto fn = gOriginalAddDirectoryEntriesFromLowerFs.get();
+DirectoryEntries WrappedGetDirectoryEntriesShared(void* wrapper, uint32_t uid,
+                                                  AbiStringParam pathArg, DIR* dirp) {
+    return WrappedGetDirectoryEntriesForAbi<DirectoryEntries>(gOriginalGetDirectoryEntries.get(),
+                                                              wrapper, uid, pathArg, dirp);
+}
+
+ValueDirectoryEntries WrappedGetDirectoryEntriesValue(void* wrapper, uint32_t uid,
+                                                      AbiStringParam pathArg, DIR* dirp) {
+    const auto fn =
+        reinterpret_cast<GetValueDirectoryEntriesFn>(gOriginalGetDirectoryEntries.get());
+    return WrappedGetDirectoryEntriesForAbi<ValueDirectoryEntries>(fn, wrapper, uid, pathArg, dirp);
+}
+
+template <typename Entries, typename OriginalFn>
+void WrappedAddDirectoryEntriesFromLowerFsForAbi(OriginalFn fn, DIR* dirp,
+                                                 LowerFsDirentFilterFn filter, Entries* entries) {
     if (fn == nullptr) {
         return;
     }
@@ -690,6 +779,19 @@ void WrappedAddDirectoryEntriesFromLowerFs(DIR* dirp, LowerFsDirentFilterFn filt
                       static_cast<unsigned>(uid), DebugPreview(parentPath).c_str(),
                       before - entries->size(), entries->size());
     }
+}
+
+void WrappedAddDirectoryEntriesFromLowerFsShared(DIR* dirp, LowerFsDirentFilterFn filter,
+                                                 DirectoryEntries* entries) {
+    WrappedAddDirectoryEntriesFromLowerFsForAbi(gOriginalAddDirectoryEntriesFromLowerFs.get(), dirp,
+                                                filter, entries);
+}
+
+void WrappedAddDirectoryEntriesFromLowerFsValue(DIR* dirp, LowerFsDirentFilterFn filter,
+                                                ValueDirectoryEntries* entries) {
+    const auto fn = reinterpret_cast<AddValueDirectoryEntriesFromLowerFsFn>(
+        gOriginalAddDirectoryEntriesFromLowerFs.get());
+    WrappedAddDirectoryEntriesFromLowerFsForAbi(fn, dirp, filter, entries);
 }
 
 // AOSP readdir postfilter stats each child path before copying the surviving dirents into a

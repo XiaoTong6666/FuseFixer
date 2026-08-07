@@ -141,11 +141,14 @@ extern "C" int8_t u_hasBinaryProperty(uint32_t codePoint, int32_t which);
 inline constexpr int32_t kUCHAR_DEFAULT_IGNORABLE_CODE_POINT = 5;
 
 using HookInstaller = int (*)(void* target, void* replacement, void** backup);
-#if defined(__x86_64__) || defined(__i386__)
+// Platform libc++ may use std::__1 while the module is built against std::__ndk1. A const string
+// reference is one object pointer on every supported ABI, so keep the boundary untyped and decode
+// the stable libc++ object layout explicitly instead of invoking methods from the wrong namespace.
+// Ghidra evidence from the supplied API 37 DEV arm64 sample: ShouldNotCache @ 0x00167ab0 and
+// is_app_accessible_path @ 0x00166270 both receive the string object in x1. They read the tag from
+// [x1], the long size from [x1 + 8], and the long data pointer from [x1 + 16], confirming the
+// classic three-word libc++ layout decoded below for that exact binary.
 using AbiStringParam = const void*;
-#else
-using AbiStringParam = const std::string&;
-#endif
 
 using IsAppAccessiblePathFn = bool (*)(void* fuse, AbiStringParam path, uint32_t uid);
 using IsPackageOwnedPathFn = bool (*)(AbiStringParam lhs, AbiStringParam rhs);
@@ -155,12 +158,26 @@ using StrcasecmpFn = int (*)(const char* lhs, const char* rhs);
 using EqualsIgnoreCaseAbiFn = bool (*)(const char* lhsData, size_t lhsSize, const char* rhsData,
                                        size_t rhsSize);
 using FuseReplyErrFn = int (*)(fuse_req_t, int);
+// Android 14 through the earlier analyzed Android 16/17 builds use the shared_ptr container. Keep
+// this legacy alias and wrapper intact; it remains part of the supported MediaProvider ABI surface.
 using DirectoryEntries = std::vector<std::shared_ptr<mediaprovider::fuse::DirectoryEntry>>;
+// The supplied API 37 DEV sample changes the element representation to an inline DirectoryEntry.
+using ValueDirectoryEntries = std::vector<mediaprovider::fuse::DirectoryEntry>;
+inline constexpr size_t kExpectedDirectoryEntryAbiSize =
+    (sizeof(std::string) + sizeof(int) + alignof(std::string) - 1) & ~(alignof(std::string) - 1);
+static_assert(sizeof(std::shared_ptr<mediaprovider::fuse::DirectoryEntry>) == 2 * sizeof(void*));
+static_assert(sizeof(mediaprovider::fuse::DirectoryEntry) == kExpectedDirectoryEntryAbiSize);
+static_assert(sizeof(DirectoryEntries) == 3 * sizeof(void*));
+static_assert(sizeof(ValueDirectoryEntries) == 3 * sizeof(void*));
 using GetDirectoryEntriesFn = DirectoryEntries (*)(void* wrapper, uint32_t uid, AbiStringParam path,
                                                    DIR* dirp);
+using GetValueDirectoryEntriesFn = ValueDirectoryEntries (*)(void* wrapper, uint32_t uid,
+                                                             AbiStringParam path, DIR* dirp);
 using LowerFsDirentFilterFn = bool (*)(const dirent& entry);
 using AddDirectoryEntriesFromLowerFsFn = void (*)(DIR* dirp, LowerFsDirentFilterFn filter,
                                                   DirectoryEntries* entries);
+using AddValueDirectoryEntriesFromLowerFsFn = void (*)(DIR* dirp, LowerFsDirentFilterFn filter,
+                                                       ValueDirectoryEntries* entries);
 using PfLookupFn = void (*)(fuse_req_t req, uint64_t parent, const char* name);
 using PfLookupPostfilterFn = void (*)(fuse_req_t req, uint64_t parent, uint32_t errorIn,
                                       const char* name, fuse_entry_out* entryOut,
@@ -195,7 +212,6 @@ using LibcMknodFn = int (*)(const char* path, mode_t mode, dev_t device);
 using LibcOpenFn = int (*)(const char* path, int flags, ...);
 using LibcOpen2Fn = int (*)(const char* path, int flags);
 
-#if defined(__x86_64__) || defined(__i386__)
 inline std::string_view AbiStringView(AbiStringParam raw) {
     if (raw == nullptr) {
         return {};
@@ -234,7 +250,7 @@ class ScopedAbiStringParam final {
         }
 
         storage_.assign(value.data(), value.size());
-        const uintptr_t encodedCap = static_cast<uintptr_t>(storage_.size() + 1) | 1U;
+        const uintptr_t encodedCap = static_cast<uintptr_t>(storage_.capacity() + 1) | 1U;
         const uintptr_t sizeValue = static_cast<uintptr_t>(storage_.size());
         const char* data = storage_.c_str();
         std::memcpy(object_.data(), &encodedCap, sizeof(encodedCap));
@@ -250,24 +266,12 @@ class ScopedAbiStringParam final {
     alignas(uintptr_t) std::array<std::byte, sizeof(uintptr_t) * 3> object_{};
     std::string storage_;
 };
-#else
-inline std::string_view AbiStringView(AbiStringParam value) {
-    return value;
-}
 
-class ScopedAbiStringParam final {
-   public:
-    explicit ScopedAbiStringParam(std::string_view value) : storage_(value) {
-    }
-
-    AbiStringParam get() const {
-        return storage_;
-    }
-
-   private:
-    std::string storage_;
+enum class DirectoryEntriesAbi : uint8_t {
+    kUnknown,
+    kSharedPtr,
+    kValue,
 };
-#endif
 
 struct PackageHideRule {
     std::string packageName;
@@ -439,11 +443,43 @@ inline constexpr DeviceHookProfile kDeviceHookProfileV6 = {
     .pfReaddirplusOffset = 0x000e6e84,
 };
 
+// Supplied Google MediaProvider API 37 DEV sample, arm64 Build ID
+// be026ea7a89bbd3d48422fa9a1289e2d. Its manifest reports versionName=DEV/versionCode=37 and does
+// not independently identify a QPR release train. Ghidra image base is 0x00100000:
+//   do_readdir_common                       @ 0x0016a9d0
+//   MediaProviderWrapper::GetDirectoryEntries @ 0x001749e0
+//   addDirectoryEntriesFromLowerFs          @ 0x00176620 (PLT thunk 0x00184028)
+// The decompiler shows do_readdir_common indexing the returned vector with a 0x20-byte stride;
+// d_name starts at +0x00 and d_type is read at +0x18. Earlier profiles index 0x10-byte shared_ptr
+// elements instead, which is why the container ABIs must never share one wrapper.
+inline constexpr DeviceHookProfile kDeviceHookProfileApi37ValueEntries = {
+    .name = "api37_google_value_entries",
+    .isAppAccessiblePathOffset = 0x00066270,
+    .pfLookupOffset = 0x0005ffc0,
+    .pfLookupPostfilterOffset = 0x00060110,
+    .pfGetattrOffset = 0x00060450,
+    .shouldNotCacheOffset = 0x00067ab0,
+    .doReaddirCommonOffset = 0x0006a9d0,
+    .getDirectoryEntriesOffset = 0x000749e0,
+    .addDirectoryEntriesFromLowerFsOffset = 0x00076620,
+    .addDirectoryEntriesFromLowerFsThunkOffset = 0x00084028,
+    .pfMkdirOffset = 0x00061370,
+    .pfMknodOffset = 0x00060ed0,
+    .pfUnlinkOffset = 0x00061890,
+    .pfRmdirOffset = 0x00061cf0,
+    .pfRenameOffset = 0x000622a0,
+    .pfCreateOffset = 0x00064e90,
+    .pfReaddirOffset = 0x00063ea0,
+    .pfReaddirPostfilterOffset = 0x00063fd0,
+    .pfReaddirplusOffset = 0x00065a60,
+};
+
 inline constexpr DeviceHookProfile kKnownDeviceHookProfiles[] = {
     kDeviceHookProfileLegacy,
     kDeviceHookProfileBp2a,
     kDeviceHookProfileV3,
     kDeviceHookProfileV6,
+    kDeviceHookProfileApi37ValueEntries,
 };
 inline constexpr size_t kFuseEntryOutWireSize = 128;
 
@@ -576,6 +612,7 @@ extern HookOriginal<FuseReplyBufFn> gOriginalReplyBuf;
 extern HookOriginal<FuseReplyErrFn> gOriginalReplyErr;
 extern HookOriginal<GetDirectoryEntriesFn> gOriginalGetDirectoryEntries;
 extern HookOriginal<AddDirectoryEntriesFromLowerFsFn> gOriginalAddDirectoryEntriesFromLowerFs;
+extern std::atomic<DirectoryEntriesAbi> gDirectoryEntriesAbi;
 extern std::atomic<void*> gLastFuseSession;
 extern std::atomic<bool> gHiddenEntryInvalidationPending;
 extern std::atomic<uint64_t> gHiddenRootParentInode;
@@ -661,9 +698,4 @@ void RememberRecentHiddenParentPath(uint32_t uid, std::string_view path);
 std::optional<std::string> LookupRecentHiddenParentPath(uint32_t uid,
                                                         uint32_t* matchedHiddenUid = nullptr);
 void ClearRecentHiddenParentPath(uint32_t uid);
-DirectoryEntries FilterHiddenDirectoryEntries(uint32_t uid, std::string_view parentPath,
-                                              DirectoryEntries entries);
-DirectoryEntries WrappedGetDirectoryEntries(void* wrapper, uint32_t uid, AbiStringParam path,
-                                            DIR* dirp);
-
 }  // namespace fusehide

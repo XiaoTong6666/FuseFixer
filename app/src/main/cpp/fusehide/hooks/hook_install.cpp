@@ -18,9 +18,13 @@
 namespace fusehide {
 
 static_assert(std::is_same_v<decltype(&WrappedShouldNotCache), ShouldNotCacheFn>);
-static_assert(std::is_same_v<decltype(&WrappedGetDirectoryEntries), GetDirectoryEntriesFn>);
-static_assert(std::is_same_v<decltype(&WrappedAddDirectoryEntriesFromLowerFs),
+static_assert(std::is_same_v<decltype(&WrappedGetDirectoryEntriesShared), GetDirectoryEntriesFn>);
+static_assert(
+    std::is_same_v<decltype(&WrappedGetDirectoryEntriesValue), GetValueDirectoryEntriesFn>);
+static_assert(std::is_same_v<decltype(&WrappedAddDirectoryEntriesFromLowerFsShared),
                              AddDirectoryEntriesFromLowerFsFn>);
+static_assert(std::is_same_v<decltype(&WrappedAddDirectoryEntriesFromLowerFsValue),
+                             AddValueDirectoryEntriesFromLowerFsFn>);
 static_assert(std::is_same_v<decltype(&WrappedPfLookup), PfLookupFn>);
 static_assert(std::is_same_v<decltype(&WrappedPfLookupPostfilter), PfLookupPostfilterFn>);
 static_assert(std::is_same_v<decltype(&WrappedPfAccess), PfAccessFn>);
@@ -102,6 +106,42 @@ struct HookInstallProcessState {
 static inline HookInstallProcessState& Process() {
     static HookInstallProcessState process;
     return process;
+}
+
+const char* DirectoryEntriesAbiName(DirectoryEntriesAbi abi) {
+    switch (abi) {
+        case DirectoryEntriesAbi::kSharedPtr:
+            return "shared_ptr";
+        case DirectoryEntriesAbi::kValue:
+            return "value";
+        case DirectoryEntriesAbi::kUnknown:
+            return "unknown";
+    }
+    return "unknown";
+}
+
+void* GetDirectoryEntriesReplacement() {
+    switch (gDirectoryEntriesAbi.load(std::memory_order_acquire)) {
+        case DirectoryEntriesAbi::kSharedPtr:
+            return reinterpret_cast<void*>(+WrappedGetDirectoryEntriesShared);
+        case DirectoryEntriesAbi::kValue:
+            return reinterpret_cast<void*>(+WrappedGetDirectoryEntriesValue);
+        case DirectoryEntriesAbi::kUnknown:
+            return nullptr;
+    }
+    return nullptr;
+}
+
+void* AddDirectoryEntriesFromLowerFsReplacement() {
+    switch (gDirectoryEntriesAbi.load(std::memory_order_acquire)) {
+        case DirectoryEntriesAbi::kSharedPtr:
+            return reinterpret_cast<void*>(+WrappedAddDirectoryEntriesFromLowerFsShared);
+        case DirectoryEntriesAbi::kValue:
+            return reinterpret_cast<void*>(+WrappedAddDirectoryEntriesFromLowerFsValue);
+        case DirectoryEntriesAbi::kUnknown:
+            return nullptr;
+    }
+    return nullptr;
 }
 
 // Compare hook installer
@@ -339,7 +379,33 @@ std::optional<uintptr_t> ResolveFirstAvailableSymbolOffset(const ModuleInfo& mod
     return std::nullopt;
 }
 
+DirectoryEntriesAbi DetectDirectoryEntriesAbi(const ModuleInfo& module) {
+    // An ordinary Itanium C++ function name does not encode its return type, so the
+    // GetDirectoryEntries symbol is identical for shared_ptr- and value-vector returns. Its helper
+    // takes the vector by pointer, which does encode the element type; require one exact helper
+    // signature and refuse these two STL hooks when neither (or both) can be proven.
+    const bool hasShared =
+        ResolveFirstAvailableSymbolOffset(module, kAddSharedDirectoryEntriesFromLowerFsSymbols)
+            .has_value();
+    const bool hasValue =
+        ResolveFirstAvailableSymbolOffset(module, kAddValueDirectoryEntriesFromLowerFsSymbols)
+            .has_value();
+    if (hasShared == hasValue) {
+        return DirectoryEntriesAbi::kUnknown;
+    }
+    if (hasShared) {
+        return DirectoryEntriesAbi::kSharedPtr;
+    }
+#if defined(__aarch64__)
+    return DirectoryEntriesAbi::kValue;
+#else
+    // The value-vector object layout and ownership boundary have only been verified on arm64.
+    return DirectoryEntriesAbi::kUnknown;
+#endif
+}
+
 enum class HookResolutionSource {
+    kUnavailable,
     kProfileFallback,
     kResolvedSymbol,
     kResolvedContains,
@@ -419,6 +485,8 @@ std::optional<uintptr_t> ResolveFeatureOffsetByContains(const ModuleInfo& module
 
 const char* HookResolutionSourceName(HookResolutionSource source) {
     switch (source) {
+        case HookResolutionSource::kUnavailable:
+            return "unavailable";
         case HookResolutionSource::kProfileFallback:
             return "profile";
         case HookResolutionSource::kResolvedSymbol:
@@ -443,6 +511,9 @@ bool IsEmbeddedX86Module(const ModuleInfo& module) {
 }
 
 bool CanUseProfileBasedTarget(HookResolutionSource source) {
+    if (source == HookResolutionSource::kUnavailable) {
+        return false;
+    }
     if constexpr (kSupportsDeviceProfileOffsets) {
         return true;
     }
@@ -468,6 +539,7 @@ struct CriticalHookTargetPlan {
 
 struct DeviceHookInstallPlan {
     DeviceHookProfile profile;
+    bool profileTrusted = false;
     CriticalHookTargetPlan shouldNotCache;
     CriticalHookTargetPlan doReaddirCommon;
     CriticalHookTargetPlan getDirectoryEntries;
@@ -477,6 +549,22 @@ struct DeviceHookInstallPlan {
     CriticalHookTargetPlan pfReaddirPostfilter;
     CriticalHookTargetPlan pfReaddirplus;
 };
+
+bool CanInstallDirectoryEntriesHooks(const DeviceHookInstallPlan& installPlan) {
+    const DirectoryEntriesAbi abi = gDirectoryEntriesAbi.load(std::memory_order_acquire);
+    if (abi == DirectoryEntriesAbi::kSharedPtr) {
+        return true;
+    }
+    return abi == DirectoryEntriesAbi::kValue && installPlan.profileTrusted &&
+           std::strcmp(installPlan.profile.name, kDeviceHookProfileApi37ValueEntries.name) == 0 &&
+           installPlan.getDirectoryEntries.source == HookResolutionSource::kResolvedSymbol &&
+           installPlan.getDirectoryEntries.offset ==
+               kDeviceHookProfileApi37ValueEntries.getDirectoryEntriesOffset &&
+           installPlan.addDirectoryEntriesFromLowerFs.source ==
+               HookResolutionSource::kResolvedSymbol &&
+           installPlan.addDirectoryEntriesFromLowerFs.offset ==
+               kDeviceHookProfileApi37ValueEntries.addDirectoryEntriesFromLowerFsOffset;
+}
 
 bool TryInstallInlineHookAt(void* target, void* replacement, void** backup,
                             const char* failureMessage);
@@ -538,11 +626,21 @@ ResolvedHookFeatureOffsets ResolveHookFeatureOffsets(const ModuleInfo& module) {
                                                                   &features.shouldNotCacheSource);
     features.doReaddirCommonOffset = ResolveFeatureOffsetBySymbols(module, kDoReaddirCommonSymbols,
                                                                    &features.doReaddirCommonSource);
-    features.getDirectoryEntriesOffset = ResolveFeatureOffsetBySymbols(
-        module, kGetDirectoryEntriesSymbols, &features.getDirectoryEntriesSource);
-    features.addDirectoryEntriesFromLowerFsOffset =
-        ResolveFeatureOffsetBySymbols(module, kAddDirectoryEntriesFromLowerFsSymbols,
-                                      &features.addDirectoryEntriesFromLowerFsSource);
+    const DirectoryEntriesAbi directoryEntriesAbi =
+        gDirectoryEntriesAbi.load(std::memory_order_acquire);
+    if (directoryEntriesAbi != DirectoryEntriesAbi::kUnknown) {
+        features.getDirectoryEntriesOffset = ResolveFeatureOffsetBySymbols(
+            module, kGetDirectoryEntriesSymbols, &features.getDirectoryEntriesSource);
+        if (directoryEntriesAbi == DirectoryEntriesAbi::kSharedPtr) {
+            features.addDirectoryEntriesFromLowerFsOffset =
+                ResolveFeatureOffsetBySymbols(module, kAddSharedDirectoryEntriesFromLowerFsSymbols,
+                                              &features.addDirectoryEntriesFromLowerFsSource);
+        } else {
+            features.addDirectoryEntriesFromLowerFsOffset =
+                ResolveFeatureOffsetBySymbols(module, kAddValueDirectoryEntriesFromLowerFsSymbols,
+                                              &features.addDirectoryEntriesFromLowerFsSource);
+        }
+    }
     features.pfMkdirOffset = ResolveFirstAvailableSymbolOffset(module, kPfMkdirSymbols);
     features.pfMknodOffset = ResolveFirstAvailableSymbolOffset(module, kPfMknodSymbols);
     features.pfUnlinkOffset = ResolveFirstAvailableSymbolOffset(module, kPfUnlinkSymbols);
@@ -602,15 +700,6 @@ ResolvedHookFeatureOffsets ResolveHookFeatureOffsets(const ModuleInfo& module) {
     if (!features.doReaddirCommonOffset.has_value()) {
         features.doReaddirCommonOffset = ResolveFeatureOffsetByContains(
             module, "do_readdir_common", &features.doReaddirCommonSource);
-    }
-    if (!features.getDirectoryEntriesOffset.has_value()) {
-        features.getDirectoryEntriesOffset = ResolveFeatureOffsetByContains(
-            module, "GetDirectoryEntries", &features.getDirectoryEntriesSource);
-    }
-    if (!features.addDirectoryEntriesFromLowerFsOffset.has_value()) {
-        features.addDirectoryEntriesFromLowerFsOffset =
-            ResolveFeatureOffsetByContains(module, "addDirectoryEntriesFromLowerFs",
-                                           &features.addDirectoryEntriesFromLowerFsSource);
     }
     if (!features.pfReaddirOffset.has_value()) {
         features.pfReaddirOffset = ResolveFeatureOffsetByContains(module, "pf_readdirEP8fuse_req",
@@ -711,6 +800,16 @@ void ApplyResolvedHookFeatureOverrides(const ResolvedHookFeatureOffsets& feature
     apply(features.pfReaddirplusOffset, &DeviceHookProfile::pfReaddirplusOffset);
 }
 
+void ClearUnresolvedHookProfileOffsets(const ResolvedHookFeatureOffsets& features,
+                                       DeviceHookProfile* profile) {
+    for (const auto& anchor : kLayoutAnchorDescriptors) {
+        if (!(features.*(anchor.featureField)).has_value()) {
+            profile->*(anchor.profileField) = 0;
+        }
+    }
+    profile->addDirectoryEntriesFromLowerFsThunkOffset = 0;
+}
+
 std::optional<DerivedOffsetResult> DeriveOffsetFromProfileLayout(
     const DeviceHookProfile& profile, const ResolvedHookFeatureOffsets& features,
     ProfileOffsetField targetField) {
@@ -725,7 +824,7 @@ std::optional<DerivedOffsetResult> DeriveOffsetFromProfileLayout(
                               static_cast<int64_t>(profile.*(anchor.profileField));
         const int64_t candidate = static_cast<int64_t>(*featureValue) + delta;
         if (candidate < 0) {
-            continue;
+            return std::nullopt;
         }
         ++votes[static_cast<uintptr_t>(candidate)];
         ++inputs;
@@ -746,7 +845,8 @@ std::optional<DerivedOffsetResult> DeriveOffsetFromProfileLayout(
             ++ties;
         }
     }
-    if (ties > 1 && bestVotes > 0) {
+    // Layout derivation is safe only when at least two independent anchors agree on one delta.
+    if (ties > 1 || bestVotes < 2 || bestVotes != inputs) {
         return std::nullopt;
     }
     return DerivedOffsetResult{bestOffset, bestVotes, inputs};
@@ -798,30 +898,6 @@ void ApplyDerivedHookFeatureOverrides(const DeviceHookProfile& bestProfile,
     derive("pf_readdirplus", features.pfReaddirplusOffset, &DeviceHookProfile::pfReaddirplusOffset,
            &pfReaddirplusDerived);
 
-    if (features.addDirectoryEntriesFromLowerFsOffset.has_value() ||
-        addDirectoryEntriesBodyDerived) {
-        const int64_t bodyToThunkDelta =
-            static_cast<int64_t>(bestProfile.addDirectoryEntriesFromLowerFsThunkOffset) -
-            static_cast<int64_t>(bestProfile.addDirectoryEntriesFromLowerFsOffset);
-        const int64_t thunkOffset =
-            static_cast<int64_t>(effectiveProfile->addDirectoryEntriesFromLowerFsOffset) +
-            bodyToThunkDelta;
-        if (thunkOffset >= 0) {
-            effectiveProfile->addDirectoryEntriesFromLowerFsThunkOffset =
-                static_cast<uintptr_t>(thunkOffset);
-            ++(*derivedCount);
-            if (derivedFlags != nullptr) {
-                derivedFlags->addDirectoryEntriesFromLowerFsThunk = true;
-            }
-            __android_log_print(
-                4, kLogTag,
-                "derived hook offset addDirectoryEntriesFromLowerFsThunk=0x%zx "
-                "base_profile=%s",
-                static_cast<size_t>(effectiveProfile->addDirectoryEntriesFromLowerFsThunkOffset),
-                bestProfile.name);
-        }
-    }
-
     if (derivedFlags != nullptr) {
         derivedFlags->shouldNotCache = shouldNotCacheDerived;
         derivedFlags->doReaddirCommon = doReaddirCommonDerived;
@@ -836,15 +912,18 @@ void ApplyDerivedHookFeatureOverrides(const DeviceHookProfile& bestProfile,
 CriticalHookTargetPlan BuildCriticalHookTargetPlan(uintptr_t effectiveOffset,
                                                    const std::optional<uintptr_t>& resolvedOffset,
                                                    HookResolutionSource resolvedSource,
-                                                   bool derived) {
+                                                   bool derived, bool profileTrusted) {
     CriticalHookTargetPlan plan;
     plan.offset = effectiveOffset;
     if (resolvedOffset.has_value()) {
         plan.source = resolvedSource;
     } else if (derived) {
         plan.source = HookResolutionSource::kDerivedLayout;
-    } else {
+    } else if (profileTrusted && effectiveOffset != 0) {
         plan.source = HookResolutionSource::kProfileFallback;
+    } else {
+        plan.offset = 0;
+        plan.source = HookResolutionSource::kUnavailable;
     }
     return plan;
 }
@@ -865,62 +944,77 @@ DeviceHookInstallPlan ResolveDeviceHookInstallPlan(const ModuleInfo& module) {
     const int resolvedCount = CountResolvedHookFeatures(features);
     const DeviceHookProfile* bestProfile = &kDeviceHookProfileLegacy;
     int bestScore = -1;
+    int bestTies = 0;
     for (const auto& profile : kKnownDeviceHookProfiles) {
         const int score = ScoreHookProfile(profile, features);
         if (score > bestScore) {
             bestScore = score;
             bestProfile = &profile;
+            bestTies = 1;
+        } else if (score == bestScore) {
+            ++bestTies;
         }
     }
+    const bool profileTrusted = bestScore >= 2 && bestScore == resolvedCount && bestTies == 1;
 
     DeviceHookInstallPlan installPlan;
     installPlan.profile = *bestProfile;
+    installPlan.profileTrusted = profileTrusted;
     int overrideCount = 0;
     ApplyResolvedHookFeatureOverrides(features, &installPlan.profile, &overrideCount);
     int derivedCount = 0;
     DerivedHookFeatureFlags derivedFlags;
-    ApplyDerivedHookFeatureOverrides(*bestProfile, features, &installPlan.profile, &derivedCount,
-                                     &derivedFlags);
+    if (profileTrusted) {
+        ApplyDerivedHookFeatureOverrides(*bestProfile, features, &installPlan.profile,
+                                         &derivedCount, &derivedFlags);
+    } else {
+        ClearUnresolvedHookProfileOffsets(features, &installPlan.profile);
+    }
 
     installPlan.shouldNotCache = BuildCriticalHookTargetPlan(
         installPlan.profile.shouldNotCacheOffset, features.shouldNotCacheOffset,
-        features.shouldNotCacheSource, derivedFlags.shouldNotCache);
+        features.shouldNotCacheSource, derivedFlags.shouldNotCache, profileTrusted);
     installPlan.doReaddirCommon = BuildCriticalHookTargetPlan(
         installPlan.profile.doReaddirCommonOffset, features.doReaddirCommonOffset,
-        features.doReaddirCommonSource, derivedFlags.doReaddirCommon);
+        features.doReaddirCommonSource, derivedFlags.doReaddirCommon, profileTrusted);
     installPlan.getDirectoryEntries = BuildCriticalHookTargetPlan(
         installPlan.profile.getDirectoryEntriesOffset, features.getDirectoryEntriesOffset,
-        features.getDirectoryEntriesSource, derivedFlags.getDirectoryEntries);
-    installPlan.addDirectoryEntriesFromLowerFs = BuildCriticalHookTargetPlan(
-        installPlan.profile.addDirectoryEntriesFromLowerFsOffset,
-        features.addDirectoryEntriesFromLowerFsOffset,
-        features.addDirectoryEntriesFromLowerFsSource, derivedFlags.addDirectoryEntriesFromLowerFs);
+        features.getDirectoryEntriesSource, derivedFlags.getDirectoryEntries, profileTrusted);
+    installPlan.addDirectoryEntriesFromLowerFs =
+        BuildCriticalHookTargetPlan(installPlan.profile.addDirectoryEntriesFromLowerFsOffset,
+                                    features.addDirectoryEntriesFromLowerFsOffset,
+                                    features.addDirectoryEntriesFromLowerFsSource,
+                                    derivedFlags.addDirectoryEntriesFromLowerFs, profileTrusted);
     installPlan.addDirectoryEntriesFromLowerFsThunk = {
         installPlan.profile.addDirectoryEntriesFromLowerFsThunkOffset,
-        derivedFlags.addDirectoryEntriesFromLowerFsThunk ? HookResolutionSource::kDerivedLayout
-                                                         : HookResolutionSource::kProfileFallback,
+        derivedFlags.addDirectoryEntriesFromLowerFsThunk
+            ? HookResolutionSource::kDerivedLayout
+            : (profileTrusted ? HookResolutionSource::kProfileFallback
+                              : HookResolutionSource::kUnavailable),
     };
-    installPlan.pfReaddir =
-        BuildCriticalHookTargetPlan(installPlan.profile.pfReaddirOffset, features.pfReaddirOffset,
-                                    features.pfReaddirSource, derivedFlags.pfReaddir);
+    installPlan.pfReaddir = BuildCriticalHookTargetPlan(
+        installPlan.profile.pfReaddirOffset, features.pfReaddirOffset, features.pfReaddirSource,
+        derivedFlags.pfReaddir, profileTrusted);
     installPlan.pfReaddirPostfilter = BuildCriticalHookTargetPlan(
         installPlan.profile.pfReaddirPostfilterOffset, features.pfReaddirPostfilterOffset,
-        features.pfReaddirPostfilterSource, derivedFlags.pfReaddirPostfilter);
+        features.pfReaddirPostfilterSource, derivedFlags.pfReaddirPostfilter, profileTrusted);
     installPlan.pfReaddirplus = BuildCriticalHookTargetPlan(
         installPlan.profile.pfReaddirplusOffset, features.pfReaddirplusOffset,
-        features.pfReaddirplusSource, derivedFlags.pfReaddirplus);
+        features.pfReaddirplusSource, derivedFlags.pfReaddirplus, profileTrusted);
 
     const int safeScore = std::max(bestScore, 0);
     if (resolvedCount == 0) {
         __android_log_print(5, kLogTag,
-                            "device hook profile fallback=%s without resolved features path=%s",
+                            "device hook profile unavailable=%s without resolved features path=%s; "
+                            "profile offsets disabled",
                             installPlan.profile.name, module.path.c_str());
-    } else if (safeScore == 0) {
-        __android_log_print(5, kLogTag,
-                            "device hook profile low confidence name=%s score=%d/%d overrides=%d "
-                            "derived=%d path=%s",
-                            installPlan.profile.name, safeScore, resolvedCount, overrideCount,
-                            derivedCount, module.path.c_str());
+    } else if (!profileTrusted) {
+        __android_log_print(
+            5, kLogTag,
+            "device hook profile untrusted name=%s score=%d/%d ties=%d overrides=%d "
+            "path=%s; unresolved offsets disabled",
+            installPlan.profile.name, safeScore, resolvedCount, bestTies, overrideCount,
+            module.path.c_str());
     } else {
         __android_log_print(4, kLogTag,
                             "selected device hook profile=%s score=%d/%d overrides=%d derived=%d "
@@ -953,6 +1047,11 @@ bool TryInstallCriticalHookFromPlan(const ModuleInfo& module, const CriticalHook
 bool TryInstallDeviceProfileInlineHook(const ModuleInfo& module, uintptr_t offset,
                                        const char* hookName, void* replacement, void** backup,
                                        const char* failureMessage) {
+    if (offset == 0) {
+        DebugLogPrint(4, "skip unresolved device profile hook %s path=%s", hookName,
+                      module.path.c_str());
+        return false;
+    }
     if constexpr (!kSupportsDeviceProfileOffsets) {
         DebugLogPrint(4, "skip device profile inline hook %s on unsupported profile arch path=%s",
                       hookName, module.path.c_str());
@@ -1257,6 +1356,11 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
     auto& process = Process();
     const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(module);
     const DeviceHookProfile& deviceProfile = installPlan.profile;
+    const bool canInstallDirectoryEntries = CanInstallDirectoryEntriesHooks(installPlan);
+    void* getDirectoryEntriesReplacement =
+        canInstallDirectoryEntries ? GetDirectoryEntriesReplacement() : nullptr;
+    void* addDirectoryEntriesReplacement =
+        canInstallDirectoryEntries ? AddDirectoryEntriesFromLowerFsReplacement() : nullptr;
     InstallFileCompareHookIfNeeded(
         fileContext.elfInfo, "fuse_lowlevel_notify_inval_entry", "fuse_lowlevel_notify_inval_entry",
         (void*)WrappedNotifyInvalEntry, &process.originalNotifyInvalEntry, "notify_inval_entry");
@@ -1290,23 +1394,25 @@ void InstallMinimalDebugHooks(const ModuleInfo& module, const FileElfContext& fi
                                    &process.originalOpen, "open");
     InstallFileCompareHookIfNeeded(fileContext.elfInfo, "__open_2", "__open_2", (void*)WrappedOpen2,
                                    &process.originalOpen2, "__open_2");
-    if (process.originalGetDirectoryEntries == nullptr) {
+    if (process.originalGetDirectoryEntries == nullptr &&
+        getDirectoryEntriesReplacement != nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.getDirectoryEntries,
-                                       "GetDirectoryEntries", (void*)WrappedGetDirectoryEntries,
+                                       "GetDirectoryEntries", getDirectoryEntriesReplacement,
                                        &process.originalGetDirectoryEntries,
                                        "hook GetDirectoryEntries failed");
     }
-    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
-        TryInstallCriticalHookFromPlan(module, installPlan.addDirectoryEntriesFromLowerFs,
-                                       "addDirectoryEntriesFromLowerFs",
-                                       (void*)WrappedAddDirectoryEntriesFromLowerFs,
-                                       &process.originalAddDirectoryEntriesFromLowerFs,
-                                       "hook addDirectoryEntriesFromLowerFs failed");
+    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr &&
+        addDirectoryEntriesReplacement != nullptr) {
+        TryInstallCriticalHookFromPlan(
+            module, installPlan.addDirectoryEntriesFromLowerFs, "addDirectoryEntriesFromLowerFs",
+            addDirectoryEntriesReplacement, &process.originalAddDirectoryEntriesFromLowerFs,
+            "hook addDirectoryEntriesFromLowerFs failed");
     }
-    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
+    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr &&
+        addDirectoryEntriesReplacement != nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.addDirectoryEntriesFromLowerFsThunk,
                                        "addDirectoryEntriesFromLowerFsThunk",
-                                       (void*)WrappedAddDirectoryEntriesFromLowerFs,
+                                       addDirectoryEntriesReplacement,
                                        &process.originalAddDirectoryEntriesFromLowerFs,
                                        "hook addDirectoryEntriesFromLowerFs thunk failed");
     }
@@ -1544,6 +1650,11 @@ void InstallAdvancedDebugHooks(const ModuleInfo& module) {
     auto& process = Process();
     const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(module);
     const DeviceHookProfile& deviceProfile = installPlan.profile;
+    const bool canInstallDirectoryEntries = CanInstallDirectoryEntriesHooks(installPlan);
+    void* getDirectoryEntriesReplacement =
+        canInstallDirectoryEntries ? GetDirectoryEntriesReplacement() : nullptr;
+    void* addDirectoryEntriesReplacement =
+        canInstallDirectoryEntries ? AddDirectoryEntriesFromLowerFsReplacement() : nullptr;
     const bool useRuntimeElf = module.path.find("!/") != std::string::npos;
     if (useRuntimeElf) {
         auto runtimeDyn = ParseRuntimeDynamicInfo(module);
@@ -1592,23 +1703,25 @@ void InstallAdvancedDebugHooks(const ModuleInfo& module) {
         InstallMinimalDebugHooks(module, *fileContext);
     }
 
-    if (process.originalGetDirectoryEntries == nullptr) {
+    if (process.originalGetDirectoryEntries == nullptr &&
+        getDirectoryEntriesReplacement != nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.getDirectoryEntries,
-                                       "GetDirectoryEntries", (void*)WrappedGetDirectoryEntries,
+                                       "GetDirectoryEntries", getDirectoryEntriesReplacement,
                                        &process.originalGetDirectoryEntries,
                                        "hook GetDirectoryEntries failed");
     }
-    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
-        TryInstallCriticalHookFromPlan(module, installPlan.addDirectoryEntriesFromLowerFs,
-                                       "addDirectoryEntriesFromLowerFs",
-                                       (void*)WrappedAddDirectoryEntriesFromLowerFs,
-                                       &process.originalAddDirectoryEntriesFromLowerFs,
-                                       "hook addDirectoryEntriesFromLowerFs failed");
+    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr &&
+        addDirectoryEntriesReplacement != nullptr) {
+        TryInstallCriticalHookFromPlan(
+            module, installPlan.addDirectoryEntriesFromLowerFs, "addDirectoryEntriesFromLowerFs",
+            addDirectoryEntriesReplacement, &process.originalAddDirectoryEntriesFromLowerFs,
+            "hook addDirectoryEntriesFromLowerFs failed");
     }
-    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr) {
+    if (process.originalAddDirectoryEntriesFromLowerFs == nullptr &&
+        addDirectoryEntriesReplacement != nullptr) {
         TryInstallCriticalHookFromPlan(module, installPlan.addDirectoryEntriesFromLowerFsThunk,
                                        "addDirectoryEntriesFromLowerFsThunk",
-                                       (void*)WrappedAddDirectoryEntriesFromLowerFs,
+                                       addDirectoryEntriesReplacement,
                                        &process.originalAddDirectoryEntriesFromLowerFs,
                                        "hook addDirectoryEntriesFromLowerFs thunk failed");
     }
@@ -1770,6 +1883,15 @@ void InstallFuseHooks() {
     const bool useRuntimeElf = module->path.find("!/") != std::string::npos;
     if (useRuntimeElf) {
         __android_log_print(4, kLogTag, "using in-memory ELF parser for embedded library path");
+    }
+
+    const DirectoryEntriesAbi directoryEntriesAbi = DetectDirectoryEntriesAbi(*module);
+    gDirectoryEntriesAbi.store(directoryEntriesAbi, std::memory_order_release);
+    __android_log_print(4, kLogTag, "directory entries ABI=%s",
+                        DirectoryEntriesAbiName(directoryEntriesAbi));
+    if (directoryEntriesAbi == DirectoryEntriesAbi::kUnknown) {
+        __android_log_print(6, kLogTag,
+                            "unknown DirectoryEntries ABI; skipping unsafe C++ container hooks");
     }
 
     CoreHookStatus coreStatus;
