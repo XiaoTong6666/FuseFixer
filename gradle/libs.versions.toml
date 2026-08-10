@@ -19,7 +19,7 @@ benchmarkMacroJunit4 = "1.4.1"
 uiautomator = "2.4.0"
 navigation3 = "1.1.5"
 navigationevent = "1.1.2"
-commonmark = "0.29.0"
+commonmark = "0.30.0"
 
 [libraries]
 androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
