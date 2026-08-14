@@ -18,6 +18,7 @@ import java.util.Properties
 
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
+    idea
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.kotlin.android) apply false
@@ -27,6 +28,30 @@ plugins {
 }
 
 val ndkVersion = "30.0.14904198"
+
+fun runGitCommand(vararg args: String): String? =
+    runCatching {
+        val process = ProcessBuilder(*args)
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+        check(process.waitFor() == 0) { output }
+        output
+    }.getOrNull()
+
+val gitCommitId = runGitCommand("git", "rev-parse", "--short", "HEAD") ?: "unknown"
+val gitCommitCount = runGitCommand("git", "rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+
+extra["gitCommitId"] = gitCommitId
+extra["gitCommitCount"] = gitCommitCount
+extra["zygiskModuleId"] = "zygisk_fusehide"
+
+idea {
+    module {
+        resourceDirs = resourceDirs + file("template") + file("scripts")
+    }
+}
 
 spotless {
     lineEndings = com.diffplug.spotless.LineEnding.UNIX
@@ -53,7 +78,7 @@ spotless {
 
     format("cpp") {
         target("**/src/main/cpp/**/*.c", "**/src/main/cpp/**/*.cpp", "**/src/main/cpp/**/*.h", "**/src/main/cpp/**/*.hpp")
-        targetExclude("**/api/**", "**/build/**")
+        targetExclude("**/api/**", "**/build/**", "**/src/main/cpp/third_party/Dobby/**")
 
         var sdkDir = ""
         val properties = Properties()
@@ -98,4 +123,33 @@ tasks.register("format") {
     dependsOn("spotlessApply")
     group = "formatting"
     description = "Formats the code using Spotless"
+}
+
+listOf("Debug", "Release").forEach { variant ->
+    tasks.register("zip$variant") {
+        group = "build"
+        description = "Builds the FuseHide $variant Zygisk module ZIP"
+        dependsOn(":app:zip$variant")
+    }
+
+    listOf(
+        "push",
+        "flash",
+        "flashWithMagisk",
+        "flashWithKsud",
+        "flashAndReboot",
+        "flashWithMagiskAndReboot",
+        "flashWithKsudAndReboot",
+    ).forEach { prefix ->
+        tasks.register("$prefix$variant") {
+            group = "deployment"
+            dependsOn(":app:$prefix$variant")
+        }
+    }
+}
+
+tasks.register("packageZygiskModule") {
+    group = "build"
+    description = "Builds the debug FuseHide Zygisk module ZIP"
+    dependsOn(":app:zipDebug")
 }

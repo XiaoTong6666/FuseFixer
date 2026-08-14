@@ -18,7 +18,11 @@ package io.github.xiaotong6666.fusehide.config;
 
 public final class HideConfigNativeBridge {
     static {
-        System.loadLibrary("fusehide");
+        try {
+            System.loadLibrary("fusehide");
+        } catch (UnsatisfiedLinkError e) {
+            // Expected in Zygisk mode; loaded by the wrapper.
+        }
     }
 
     private HideConfigNativeBridge() {}

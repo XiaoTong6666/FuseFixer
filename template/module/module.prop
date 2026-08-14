@@ -1,0 +1,6 @@
+id=zygisk_fusehide
+name=Zygisk - FuseHide
+version=@VERSION_NAME@ (@VERSION_CODE@-@COMMIT_HASH@-@BUILD_TYPE@)
+versionCode=@VERSION_CODE@
+author=XiaoTong
+description=Hide /sdcard paths per-UID in the MediaProvider FUSE daemon via Zygisk

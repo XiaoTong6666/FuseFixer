@@ -2,3 +2,7 @@
     path = uihelper
     url = https://github.com/XiaoTong6666/uihelper
 	branch = main
+[submodule "app/src/main/cpp/third_party/Dobby"]
+	path = app/src/main/cpp/third_party/Dobby
+	url = https://github.com/XiaoTong6666/Dobby
+	branch = master

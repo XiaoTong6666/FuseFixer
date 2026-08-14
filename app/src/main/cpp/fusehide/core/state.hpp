@@ -498,7 +498,6 @@ struct NativeApiEntries {
 extern HookInstaller gHookInstaller;
 extern JavaVM* gJavaVm;
 extern UHasBinaryPropertyFn gUHasBinaryProperty;
-extern std::once_flag gXzCrcInitOnce;
 extern HookOriginal<IsAppAccessiblePathFn> gOriginalIsAppAccessiblePath;
 extern HookOriginal<IsPackageOwnedPathFn> gOriginalIsPackageOwnedPath;
 extern HookOriginal<IsBpfBackingPathFn> gOriginalIsBpfBackingPath;

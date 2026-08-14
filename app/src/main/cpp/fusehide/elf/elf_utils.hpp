@@ -307,6 +307,7 @@ inline void FlushCodeRange(void* begin, void* end) {
 
 std::optional<ModuleInfo> FindTargetModule();
 std::optional<ModuleInfo> FindModuleFromMaps();
+std::optional<ModuleInfo> FindModuleFromMaps(std::string_view pathMarker);
 std::optional<MappedFile> MapReadOnlyFile(const std::string& path, size_t fileOffset = 0);
 std::optional<MappedFile> MakeOwnedFile(std::vector<std::byte> bytes);
 uint16_t ReadLe16(const std::byte* ptr);

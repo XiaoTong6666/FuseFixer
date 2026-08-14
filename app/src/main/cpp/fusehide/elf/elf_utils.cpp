@@ -128,7 +128,10 @@ int DlIterateCallback(dl_phdr_info* info, size_t, void* data) {
 
 }  // namespace
 
-std::optional<ModuleInfo> FindModuleFromMaps() {
+std::optional<ModuleInfo> FindModuleFromMaps(std::string_view pathMarker) {
+    if (pathMarker.empty()) {
+        return std::nullopt;
+    }
     FILE* maps = std::fopen("/proc/self/maps", "re");
     if (maps == nullptr) {
         return std::nullopt;
@@ -154,7 +157,7 @@ std::optional<ModuleInfo> FindModuleFromMaps() {
             continue;
         }
         std::string currentPath = pathOffset > 0 ? TrimMapsPath(line + pathOffset) : std::string();
-        if (currentPath.find(kTargetLibrary) == std::string::npos) {
+        if (currentPath.find(pathMarker) == std::string::npos) {
             continue;
         }
         if (lowestBase == 0 || static_cast<uintptr_t>(start) < lowestBase) {
@@ -191,6 +194,10 @@ std::optional<ModuleInfo> FindModuleFromMaps() {
     module.execEnd = execEnd;
     module.execPerms = execPerms;
     return module;
+}
+
+std::optional<ModuleInfo> FindModuleFromMaps() {
+    return FindModuleFromMaps(kTargetLibrary);
 }
 
 std::optional<ModuleInfo> FindTargetModule() {
@@ -429,7 +436,8 @@ std::optional<MappedFile> DecompressGnuDebugdata(const std::byte* compressed, si
         return std::nullopt;
     }
 
-    std::call_once(gXzCrcInitOnce, []() { xz_crc32_init(); });
+    static std::once_flag xzCrcInitOnce;
+    std::call_once(xzCrcInitOnce, []() { xz_crc32_init(); });
 
     struct DecoderDeleter {
         void operator()(xz_dec* decoder) const {
