@@ -80,3 +80,45 @@ if(NOT icu-lib)
 endif()
 
 target_link_libraries(fusehide ${log-lib} ${dl-lib} ${icu-lib})
+
+
+target_link_options(fusehide PRIVATE -Wl,-z,max-page-size=16384)
+
+add_subdirectory(third_party/Dobby)
+
+add_library(
+    zygisk
+    SHARED
+    zygisk/module.cpp
+    zygisk/dex_loader.cpp
+    zygisk/dlopen_monitor.cpp
+    fusehide/elf/elf_utils.cpp
+    third_party/xz-embedded/xz_dec_stream.c
+    third_party/xz-embedded/xz_dec_lzma2.c
+    third_party/xz-embedded/xz_crc32.c
+)
+
+target_compile_features(zygisk PRIVATE cxx_std_20)
+
+target_compile_options(
+    zygisk
+    PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+    -fvisibility=hidden
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+)
+
+target_include_directories(
+    zygisk
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    third_party/Dobby/include
+    third_party/xz-embedded
+    zygisk/include
+)
+
+target_link_libraries(zygisk dobby_static ${log-lib} ${dl-lib})
+target_link_options(zygisk PRIVATE -Wl,-z,max-page-size=16384)

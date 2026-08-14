@@ -34,3 +34,11 @@
 # These are reached from the module entry and receiver registration path.
 -keep class io.github.xiaotong6666.fusehide.status.StatusBroadcastReceiver { *; }
 -keep class io.github.xiaotong6666.fusehide.xposed.MainThreadTask { *; }
+
+# Zygisk entry called via reflection; class and method names must be preserved.
+-keep class io.github.xiaotong6666.fusehide.xposed.ZygiskEntry { *; }
+
+# JNI methods are registered explicitly from the injected process. Keep every
+# declaration, including methods that currently have no Java-side caller.
+-keep class io.github.xiaotong6666.fusehide.config.HideConfigNativeBridge { *; }
+-keepnames class io.github.xiaotong6666.fusehide.config.HideConfigNativeBridge

@@ -20,7 +20,6 @@ namespace fusehide {
 UHasBinaryPropertyFn gUHasBinaryProperty = u_hasBinaryProperty;
 HookInstaller gHookInstaller = nullptr;
 JavaVM* gJavaVm = nullptr;
-std::once_flag gXzCrcInitOnce;
 HookOriginal<IsAppAccessiblePathFn> gOriginalIsAppAccessiblePath;
 HookOriginal<IsPackageOwnedPathFn> gOriginalIsPackageOwnedPath;
 HookOriginal<IsBpfBackingPathFn> gOriginalIsBpfBackingPath;

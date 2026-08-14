@@ -15,6 +15,8 @@
  */
 
 import java.util.Properties
+import io.github.xiaotong6666.fusehide.gradle.AdbModuleTask
+import io.github.xiaotong6666.fusehide.gradle.ModuleInstallerMode
 
 plugins {
     alias(libs.plugins.android.application)
@@ -29,6 +31,10 @@ if (localPropertiesFile.exists()) {
     localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
+val gitCommitId = rootProject.extra["gitCommitId"] as String
+val gitCommitCount = rootProject.extra["gitCommitCount"] as Int
+val fuseHideVersionName = "1.$gitCommitCount"
+
 android {
     namespace = "io.github.xiaotong6666.fusehide"
     compileSdk = 37
@@ -37,34 +43,17 @@ android {
         applicationId = "io.github.xiaotong6666.fusehide"
         minSdk = 31
         targetSdk = 37
-        
-        val gitCommitCount = try {
-            ProcessBuilder("git", "rev-list", "--count", "HEAD")
-                .directory(rootDir)
-                .start()
-                .inputStream.bufferedReader().use { it.readText() }.trim().toInt()
-        } catch (_: Exception) {
-            1
-        }
-        val gitCommitHash = try {
-            ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-                .directory(rootDir)
-                .start()
-                .inputStream.bufferedReader().use { it.readText() }.trim()
-        } catch (_: Exception) {
-            "unknown"
-        }
-        
         versionCode = gitCommitCount
-        versionName = "1.$gitCommitCount"
-        
-        buildConfigField("String", "COMMIT_HASH", "\"$gitCommitHash\"")
+        versionName = fuseHideVersionName
+
+        buildConfigField("String", "COMMIT_HASH", "\"$gitCommitId\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++20", "-fvisibility=hidden")
+                targets += listOf("fusehide", "zygisk")
             }
         }
     }
@@ -131,6 +120,7 @@ android {
     }
     packaging {
         jniLibs {
+            excludes += "**/libdobby.so"
             useLegacyPackaging = false
         }
     }
@@ -165,4 +155,82 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation(libs.androidx.profileinstaller)
     add("baselineProfile", project(path = ":baselineprofile"))
+}
+
+fun String.capitalized(): String = replaceFirstChar { char ->
+    if (char.isLowerCase()) char.titlecase() else char.toString()
+}
+
+listOf("debug", "release").forEach { buildType ->
+    val variant = buildType.capitalized()
+    val buildMetadata = "$gitCommitCount-$gitCommitId-$buildType"
+    val zipName = "FuseHide-${fuseHideVersionName}_${buildMetadata}.zip"
+    val zipOutput = layout.buildDirectory.file("zygisk/$zipName")
+    val packageTaskName = "package$variant"
+    val repackTask = tasks.register<Exec>("repack${variant}Apk") {
+        group = "build"
+        description = "Adds the FuseHide Zygisk module payload to the $buildType APK"
+        mustRunAfter(packageTaskName)
+        workingDir(rootDir)
+        commandLine(
+            "python3",
+            rootProject.file("scripts/repack-zygisk.py").absolutePath,
+            "--build-type",
+            buildType,
+            "--skip-build",
+            "--in-place",
+        )
+        inputs.file(rootProject.file("scripts/repack-zygisk.py"))
+        inputs.dir(rootProject.file("template/module"))
+        outputs.file(zipOutput)
+        outputs.upToDateWhen { false }
+    }
+    tasks.matching { it.name == packageTaskName }.configureEach {
+        finalizedBy(repackTask)
+    }
+    tasks.matching { it.name == "assemble$variant" || it.name == "install$variant" }.configureEach {
+        dependsOn(repackTask)
+    }
+    val zipTask = tasks.register("zip$variant") {
+        group = "build"
+        description = "Builds the FuseHide $buildType Zygisk module ZIP"
+        dependsOn(packageTaskName, repackTask)
+        outputs.file(zipOutput)
+    }
+
+    fun registerAdbTask(
+        name: String,
+        installerMode: ModuleInstallerMode? = null,
+        shouldReboot: Boolean = false,
+    ) {
+        tasks.register<AdbModuleTask>(name) {
+            dependsOn(zipTask)
+            moduleZip.set(zipOutput)
+            installerMode?.let { installer.set(it) }
+            reboot.set(shouldReboot)
+            device.convention(providers.gradleProperty("device"))
+        }
+    }
+
+    registerAdbTask("push$variant")
+    registerAdbTask("flash$variant", ModuleInstallerMode.AUTO)
+    registerAdbTask("flashWithMagisk$variant", ModuleInstallerMode.MAGISK)
+    registerAdbTask("flashWithKsud$variant", ModuleInstallerMode.KERNEL_SU)
+    registerAdbTask("flashAndReboot$variant", ModuleInstallerMode.AUTO, shouldReboot = true)
+    registerAdbTask(
+        "flashWithMagiskAndReboot$variant",
+        ModuleInstallerMode.MAGISK,
+        shouldReboot = true,
+    )
+    registerAdbTask(
+        "flashWithKsudAndReboot$variant",
+        ModuleInstallerMode.KERNEL_SU,
+        shouldReboot = true,
+    )
+}
+
+tasks.register("packageZygiskModule") {
+    group = "build"
+    description = "Builds the debug FuseHide Zygisk module ZIP"
+    dependsOn("zipDebug")
 }
