@@ -38,6 +38,7 @@ namespace {
 constexpr char kLogTag[] = "FuseHide";
 constexpr char kDexRelPath[] = "dex";
 constexpr char kFuseHideLibrary[] = "libfusehide.so";
+constexpr char kLsposedScopeFlag[] = "lsp_scope_enabled";
 constexpr char kMediaProviderPackage[] = "com.android.providers.media.module";
 constexpr char kGoogleMediaProviderPackage[] = "com.google.android.providers.media.module";
 
@@ -124,6 +125,25 @@ bool PreloadModuleRuntime(zygisk::Api* api, JNIEnv* env) {
     return true;
 }
 
+bool ShouldSkipForLsposedScope(zygisk::Api* api) {
+    if (api == nullptr) {
+        return false;
+    }
+    const int moduleDirFd = api->getModuleDir();
+    if (moduleDirFd < 0) {
+        return false;
+    }
+    const int flagFd = openat(moduleDirFd, kLsposedScopeFlag, O_RDONLY | O_CLOEXEC);
+    close(moduleDirFd);
+    if (flagFd < 0) {
+        return false;
+    }
+    close(flagFd);
+    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                        "LSPosed scope flag detected; skip Zygisk backend");
+    return true;
+}
+
 }  // namespace
 
 namespace {
@@ -138,6 +158,10 @@ class FuseHideZygiskModule : public zygisk::ModuleBase {
     void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
         shouldInject_ = IsTargetProcess(gVmEnv(), args != nullptr ? args->nice_name : nullptr);
         if (!shouldInject_) {
+            return;
+        }
+        if (ShouldSkipForLsposedScope(api_)) {
+            shouldInject_ = false;
             return;
         }
         if (!PreloadModuleRuntime(api_, gVmEnv())) {
