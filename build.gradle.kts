@@ -27,7 +27,7 @@ plugins {
     alias(libs.plugins.androidx.baselineprofile) apply false
 }
 
-val ndkVersion = "30.0.14904198"
+val ndkVersion = "30.0.15729638"
 
 fun runGitCommand(vararg args: String): String? =
     runCatching {
