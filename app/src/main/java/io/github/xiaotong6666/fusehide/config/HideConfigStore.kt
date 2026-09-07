@@ -317,16 +317,15 @@ object HideConfigStore {
     fun requestInjectedProcessConfigBundle(context: Context, callback: ConfigBundleCallback) {
         val appContext = context.applicationContext ?: context
         val requestToken = UUID.randomUUID().toString()
+        val replyAction = "$ACTION_SET_HIDE_CONFIG.$requestToken"
         val finished = AtomicBoolean(false)
         val mainHandler = Handler(Looper.getMainLooper())
         lateinit var receiver: BroadcastReceiver
-        val pendingIntentFlags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE or
-            if (Build.VERSION.SDK_INT >= 34) PendingIntent.FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT else 0
         val replyPendingIntent = PendingIntent.getBroadcast(
             appContext,
             requestToken.hashCode(),
-            Intent(ACTION_SET_HIDE_CONFIG).setPackage(appContext.packageName),
-            pendingIntentFlags,
+            Intent(replyAction).setPackage(appContext.packageName),
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE,
         )
 
         fun finish(bundle: Bundle?) {
@@ -343,7 +342,7 @@ object HideConfigStore {
 
         receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action != ACTION_SET_HIDE_CONFIG) {
+                if (intent?.action != replyAction) {
                     return
                 }
                 val responseToken = intent.getStringExtra(EXTRA_QUERY_TOKEN)
@@ -354,9 +353,9 @@ object HideConfigStore {
             }
         }
 
-        val filter = IntentFilter(ACTION_SET_HIDE_CONFIG)
+        val filter = IntentFilter(replyAction)
         if (Build.VERSION.SDK_INT >= 33) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
         }

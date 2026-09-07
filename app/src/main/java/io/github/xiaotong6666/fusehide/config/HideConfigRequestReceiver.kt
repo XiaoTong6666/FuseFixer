@@ -21,6 +21,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Process
 import android.util.Log
 
 private val allowedConfigRequestPackages = setOf(
@@ -76,6 +77,12 @@ class HideConfigRequestReceiver : BroadcastReceiver() {
     }
 
     private fun isTrustedRequester(context: Context, replyPendingIntent: PendingIntent): Boolean {
+        if (!replyPendingIntent.isBroadcast || replyPendingIntent.isImmutable) {
+            return false
+        }
+        if (replyPendingIntent.creatorUserHandle != Process.myUserHandle()) {
+            return false
+        }
         val creatorPackage = replyPendingIntent.creatorPackage ?: return false
         if (creatorPackage !in allowedConfigRequestPackages) {
             return false
