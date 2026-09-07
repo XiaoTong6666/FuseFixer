@@ -362,6 +362,38 @@ std::optional<void*> ResolveTargetSymbolRuntime(const ModuleInfo& module,
     return reinterpret_cast<void*>(module.base + *offset);
 }
 
+bool IsLibfuseAddress(void* address) {
+    Dl_info info{};
+    if (address == nullptr || dladdr(address, &info) == 0 || info.dli_fname == nullptr) {
+        return false;
+    }
+    const std::string_view path(info.dli_fname);
+    return path == "libfuse.so" || path.ends_with("/libfuse.so");
+}
+
+std::optional<void*> ResolveImportedFunctionTarget(const ModuleInfo& importingModule,
+                                                   std::string_view symbolName) {
+    const auto dynamicInfo = ParseRuntimeDynamicInfo(importingModule);
+    if (!dynamicInfo.has_value()) {
+        return std::nullopt;
+    }
+    const auto symbolIndex = FindRuntimeSymbolIndex(
+        *dynamicInfo, reinterpret_cast<const uint8_t*>(symbolName.data()), symbolName.size());
+    if (!symbolIndex.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto slots =
+        FindRuntimeRelocationSlotsForSymbol(*dynamicInfo, *symbolIndex, importingModule.base);
+    for (const uintptr_t slotAddress : slots) {
+        void* target = *reinterpret_cast<void* const*>(slotAddress);
+        if (IsLibfuseAddress(target)) {
+            return target;
+        }
+    }
+    return std::nullopt;
+}
+
 template <size_t N>
 std::optional<uintptr_t> ResolveFirstAvailableSymbolOffset(const ModuleInfo& module,
                                                            const std::string_view (&symbols)[N]) {
@@ -1899,19 +1931,46 @@ void InstallFuseHooks() {
         __android_log_print(4, kLogTag, "using in-memory ELF parser for embedded library path");
     }
 
+    const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(*module);
     if (Process().fuseReqCtx == nullptr) {
-        auto resolved = useRuntimeElf ? ResolveTargetSymbolRuntime(*module, "fuse_req_ctx")
-                                      : ResolveTargetSymbol(*module, "fuse_req_ctx");
-        if (resolved.has_value()) {
-            Process().fuseReqCtx = *resolved;
-            __android_log_print(4, kLogTag, "resolved fuse_req_ctx=%p", *resolved);
+        // MediaProvider links libfuse.so separately, so fuse_req_ctx is normally an undefined
+        // import in libfuse_jni.so. Prefer linker resolution, then its bound relocation, then
+        // libfuse.so:
+        // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/f2abe4aec018f0522b4b1303fb25351db0604eb5/jni/Android.bp#46
+        // https://android.googlesource.com/platform/external/libfuse/+/e877eedab4254ceb2af4b77c7327e4d0cde30824/lib/fuse_lowlevel.c#2771
+        void* resolved = dlsym(RTLD_DEFAULT, "fuse_req_ctx");
+        const char* resolutionSource = "RTLD_DEFAULT";
+        if (resolved == nullptr) {
+            const auto importedTarget = ResolveImportedFunctionTarget(*module, "fuse_req_ctx");
+            if (importedTarget.has_value()) {
+                resolved = *importedTarget;
+                resolutionSource = "libfuse_jni relocation";
+            }
+        }
+        if (resolved == nullptr) {
+            const auto libfuseModule = FindModuleFromMaps("/libfuse.so");
+            if (libfuseModule.has_value()) {
+                const bool useRuntimeLibfuse = libfuseModule->path.find("!/") != std::string::npos;
+                const auto libfuseSymbol =
+                    useRuntimeLibfuse ? ResolveTargetSymbolRuntime(*libfuseModule, "fuse_req_ctx")
+                                      : ResolveTargetSymbol(*libfuseModule, "fuse_req_ctx");
+                if (libfuseSymbol.has_value()) {
+                    resolved = *libfuseSymbol;
+                    resolutionSource = "libfuse.so";
+                }
+            }
+        }
+
+        if (resolved != nullptr) {
+            Process().fuseReqCtx = resolved;
+            __android_log_print(4, kLogTag, "resolved fuse_req_ctx=%p source=%s", resolved,
+                                resolutionSource);
         } else {
-            __android_log_print(
-                5, kLogTag, "fuse_req_ctx unavailable; using architecture-specific AOSP layout");
+            __android_log_print(6, kLogTag,
+                                "fuse_req_ctx unavailable; no verified libfuse layout fallback");
         }
     }
 
-    const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(*module);
     const bool hasClassicStringAbi = HasVerifiedClassicStringAbi(installPlan);
     __android_log_print(hasClassicStringAbi ? 4 : 5, kLogTag,
                         "libc++ string ABI=%s profile=%s trusted=%d",
