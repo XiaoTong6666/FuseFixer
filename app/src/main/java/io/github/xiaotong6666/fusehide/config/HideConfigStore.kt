@@ -16,6 +16,7 @@
 
 package io.github.xiaotong6666.fusehide.config
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -47,8 +48,7 @@ object HideConfigStore {
     const val EXTRA_RELOAD_APPLIED: String = "reload_applied"
     const val EXTRA_RELOAD_MESSAGE: String = "reload_message"
     const val EXTRA_QUERY_TOKEN: String = "query_token"
-    const val EXTRA_REPLY_PACKAGE: String = "reply_package"
-    const val EXTRA_REPLY_ACTION: String = "reply_action"
+    const val EXTRA_REPLY_PENDING_INTENT: String = "reply_pending_intent"
     private const val PREFS_NAME = "hide_config"
     private const val SNAPSHOT_PREFS_NAME = "hide_config_snapshot"
     private const val SNAPSHOT_VERSION = 1
@@ -320,11 +320,20 @@ object HideConfigStore {
         val finished = AtomicBoolean(false)
         val mainHandler = Handler(Looper.getMainLooper())
         lateinit var receiver: BroadcastReceiver
+        val pendingIntentFlags = PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE or
+            if (Build.VERSION.SDK_INT >= 34) PendingIntent.FLAG_ALLOW_UNSAFE_IMPLICIT_INTENT else 0
+        val replyPendingIntent = PendingIntent.getBroadcast(
+            appContext,
+            requestToken.hashCode(),
+            Intent(ACTION_SET_HIDE_CONFIG).setPackage(appContext.packageName),
+            pendingIntentFlags,
+        )
 
         fun finish(bundle: Bundle?) {
             if (!finished.compareAndSet(false, true)) {
                 return
             }
+            replyPendingIntent.cancel()
             try {
                 appContext.unregisterReceiver(receiver)
             } catch (_: Throwable) {
@@ -359,10 +368,9 @@ object HideConfigStore {
                 .setComponent(ComponentName(APP_PACKAGE, "$APP_PACKAGE.config.HideConfigRequestReceiver"))
                 .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 .putExtra(EXTRA_QUERY_TOKEN, requestToken)
-                .putExtra(EXTRA_REPLY_PACKAGE, appContext.packageName)
-                .putExtra(EXTRA_REPLY_ACTION, ACTION_SET_HIDE_CONFIG),
+                .putExtra(EXTRA_REPLY_PENDING_INTENT, replyPendingIntent),
         )
-        Log.d("FuseHide", "requested hide config replyPackage=${appContext.packageName} queryToken=$requestToken")
+        Log.d("FuseHide", "requested hide config queryToken=$requestToken")
     }
 
     @JvmStatic
