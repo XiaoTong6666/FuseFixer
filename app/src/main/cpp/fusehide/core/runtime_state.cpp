@@ -35,6 +35,7 @@ HookOriginal<DoReaddirCommonFn> gOriginalDoReaddirCommon;
 HookOriginal<PfFileInfoFn> gOriginalPfGetattr;
 HookOriginal<LibcOpenFn> gOriginalOpen;
 HookOriginal<LibcOpen2Fn> gOriginalOpen2;
+HookOriginal<FuseReqCtxFn> gFuseReqCtx;
 HookOriginal<LibcMkdirFn> gOriginalMkdir;
 HookOriginal<LibcMknodFn> gOriginalMknod;
 HookOriginal<LibcStatFn> gOriginalLstat;
@@ -288,12 +289,26 @@ uint32_t RuntimeState::ReqUid(fuse_req_t req) {
     if (req == nullptr) {
         return 0;
     }
-    // The reverse-engineered device build reads req->ctx.uid from fuse_req + 0x3c in pf_getattr()
-    // and related handlers. AOSP accesses req->ctx.uid directly in C++, but our low-level hooks
-    // only receive the opaque request pointer, so this mirrors the verified device layout. AOSP
-    // reference: jni/FuseDaemon.cpp#2134 and #2145
-    // https://android.googlesource.com/platform/packages/providers/MediaProvider/+/refs/heads/android14-release/jni/FuseDaemon.cpp#2134
-    return *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(req) + 0x3c);
+    if (const auto fn = gFuseReqCtx.get(); fn != nullptr) {
+        const fuse_ctx* context = fn(req);
+        return context != nullptr ? context->uid : 0;
+    }
+
+// AOSP libfuse places ctx after se, unique, ctr, and pthread_mutex_t, and fuse_req_ctx returns it:
+// https://android.googlesource.com/platform/external/libfuse/+/e877eedab4254ceb2af4b77c7327e4d0cde30824/lib/fuse_i.h#14
+// https://android.googlesource.com/platform/external/libfuse/+/e877eedab4254ceb2af4b77c7327e4d0cde30824/lib/fuse_lowlevel.c#2771
+// MediaProvider reads request UIDs through that API:
+// https://android.googlesource.com/platform/packages/providers/MediaProvider/+/f2abe4aec018f0522b4b1303fb25351db0604eb5/jni/FuseDaemon.cpp#403
+// bionic defines pthread_mutex_t as 10 int32s on LP64 and one int32 on 32-bit, producing offsets
+// 0x3c and 0x18 respectively:
+// https://android.googlesource.com/platform/bionic/+/731631f300090436d7f5df80d50b6275c8c60a93/libc/include/bits/pthread_types.h#68
+#if defined(__LP64__)
+    constexpr size_t kCtxUidOffset = 0x3c;
+#else
+    constexpr size_t kCtxUidOffset = 0x18;
+#endif
+    return *reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(req) +
+                                              kCtxUidOffset);
 }
 
 void RuntimeState::RememberFuseSession(fuse_req_t req) {

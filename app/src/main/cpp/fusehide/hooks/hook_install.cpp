@@ -85,6 +85,7 @@ struct HookInstallProcessState {
     void*& originalPfGetattr = gOriginalPfGetattr.rawStorage();
     void*& originalOpen = gOriginalOpen.rawStorage();
     void*& originalOpen2 = gOriginalOpen2.rawStorage();
+    void*& fuseReqCtx = gFuseReqCtx.rawStorage();
     void*& originalMkdir = gOriginalMkdir.rawStorage();
     void*& originalMknod = gOriginalMknod.rawStorage();
     void*& originalLstat = gOriginalLstat.rawStorage();
@@ -550,7 +551,15 @@ struct DeviceHookInstallPlan {
     CriticalHookTargetPlan pfReaddirplus;
 };
 
+bool HasVerifiedClassicStringAbi(const DeviceHookInstallPlan& installPlan) {
+    return installPlan.profileTrusted &&
+           installPlan.profile.stringLayout == AbiStringLayout::kClassic;
+}
+
 bool CanInstallDirectoryEntriesHooks(const DeviceHookInstallPlan& installPlan) {
+    if (!HasVerifiedClassicStringAbi(installPlan)) {
+        return false;
+    }
     const DirectoryEntriesAbi abi = gDirectoryEntriesAbi.load(std::memory_order_acquire);
     if (abi == DirectoryEntriesAbi::kSharedPtr) {
         return true;
@@ -1306,18 +1315,22 @@ void InstallMinimalCoreHooks(const ModuleInfo& module, const FileElfContext& fil
     auto& process = Process();
     const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(module);
     const DeviceHookProfile& deviceProfile = installPlan.profile;
-    InstallFirstAvailableFileInlineHook(
-        module, kIsAppAccessiblePathSymbols, reinterpret_cast<void*>(+WrappedIsAppAccessiblePath),
-        reinterpret_cast<void**>(&process.originalIsAppAccessiblePath),
-        "hook is_app_accessible_path failed");
-    InstallFirstAvailableFileInlineHook(
-        module, kIsPackageOwnedPathSymbols, reinterpret_cast<void*>(+WrappedIsPackageOwnedPath),
-        reinterpret_cast<void**>(&process.originalIsPackageOwnedPath),
-        "hook is_package_owned_path failed");
-    InstallFirstAvailableFileInlineHook(module, kIsBpfBackingPathSymbols,
-                                        reinterpret_cast<void*>(+WrappedIsBpfBackingPath),
-                                        reinterpret_cast<void**>(&process.originalIsBpfBackingPath),
-                                        "hook is_bpf_backing_path failed");
+    const bool hasClassicStringAbi = HasVerifiedClassicStringAbi(installPlan);
+    if (hasClassicStringAbi) {
+        InstallFirstAvailableFileInlineHook(
+            module, kIsAppAccessiblePathSymbols,
+            reinterpret_cast<void*>(+WrappedIsAppAccessiblePath),
+            reinterpret_cast<void**>(&process.originalIsAppAccessiblePath),
+            "hook is_app_accessible_path failed");
+        InstallFirstAvailableFileInlineHook(
+            module, kIsPackageOwnedPathSymbols, reinterpret_cast<void*>(+WrappedIsPackageOwnedPath),
+            reinterpret_cast<void**>(&process.originalIsPackageOwnedPath),
+            "hook is_package_owned_path failed");
+        InstallFirstAvailableFileInlineHook(
+            module, kIsBpfBackingPathSymbols, reinterpret_cast<void*>(+WrappedIsBpfBackingPath),
+            reinterpret_cast<void**>(&process.originalIsBpfBackingPath),
+            "hook is_bpf_backing_path failed");
+    }
 
     InstallFileCompareHookIfNeeded(fileContext.elfInfo, kStrcasecmpSymbol, kStrcasecmpSymbol,
                                    reinterpret_cast<void*>(+WrappedStrcasecmp),
@@ -1327,7 +1340,7 @@ void InstallMinimalCoreHooks(const ModuleInfo& module, const FileElfContext& fil
                                    reinterpret_cast<void*>(+WrappedEqualsIgnoreCaseAbi),
                                    &process.originalEqualsIgnoreCase, "EqualsIgnoreCase");
 
-    if (process.originalIsAppAccessiblePath == nullptr) {
+    if (hasClassicStringAbi && process.originalIsAppAccessiblePath == nullptr) {
         // Reverse-engineered record: is_app_accessible_path @ 0x0017bb5c.
         // This is the shared access-policy gate reached by lookup/readdir/getattr and by several
         // inode-based handlers such as access/open/opendir. Those paths do not all have their own
@@ -1341,7 +1354,7 @@ void InstallMinimalCoreHooks(const ModuleInfo& module, const FileElfContext& fil
             "hook is_app_accessible_path failed");
     }
 
-    if (Process().originalShouldNotCache == nullptr) {
+    if (hasClassicStringAbi && Process().originalShouldNotCache == nullptr) {
         TryInstallCriticalHookFromPlan(
             module, installPlan.shouldNotCache, "ShouldNotCache", (void*)WrappedShouldNotCache,
             &Process().originalShouldNotCache, "hook ShouldNotCache failed");
@@ -1567,21 +1580,22 @@ void InstallAdvancedCoreHooks(const ModuleInfo& module, CoreHookStatus* status) 
     auto& process = Process();
     const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(module);
     const DeviceHookProfile& deviceProfile = installPlan.profile;
-    if (!status->appAccessible) {
+    const bool hasClassicStringAbi = HasVerifiedClassicStringAbi(installPlan);
+    if (hasClassicStringAbi && !status->appAccessible) {
         InstallFirstAvailableInlineHook(
             kIsAppAccessiblePathSymbols, reinterpret_cast<void*>(+WrappedIsAppAccessiblePath),
             reinterpret_cast<void**>(&process.originalIsAppAccessiblePath),
             "hook is_app_accessible_path failed");
     }
 
-    if (!status->packageOwned) {
+    if (hasClassicStringAbi && !status->packageOwned) {
         InstallFirstAvailableInlineHook(
             kIsPackageOwnedPathSymbols, reinterpret_cast<void*>(+WrappedIsPackageOwnedPath),
             reinterpret_cast<void**>(&process.originalIsPackageOwnedPath),
             "hook is_package_owned_path failed");
     }
 
-    if (!status->bpfBacking) {
+    if (hasClassicStringAbi && !status->bpfBacking) {
         InstallFirstAvailableInlineHook(kIsBpfBackingPathSymbols,
                                         reinterpret_cast<void*>(+WrappedIsBpfBackingPath),
                                         reinterpret_cast<void**>(&process.originalIsBpfBackingPath),
@@ -1622,7 +1636,7 @@ void InstallAdvancedCoreHooks(const ModuleInfo& module, CoreHookStatus* status) 
         }
     }
 
-    if (process.originalIsAppAccessiblePath == nullptr) {
+    if (hasClassicStringAbi && process.originalIsAppAccessiblePath == nullptr) {
         // Reverse-engineered record: is_app_accessible_path @ 0x0017bb5c.
         // Repeat the same last-resort fallback here because the advanced path runs when the
         // initial file-backed install was unavailable or still failed to resolve this stripped
@@ -1634,7 +1648,7 @@ void InstallAdvancedCoreHooks(const ModuleInfo& module, CoreHookStatus* status) 
             "hook is_app_accessible_path failed");
     }
 
-    if (Process().originalShouldNotCache == nullptr) {
+    if (hasClassicStringAbi && Process().originalShouldNotCache == nullptr) {
         TryInstallCriticalHookFromPlan(
             module, installPlan.shouldNotCache, "ShouldNotCache", (void*)WrappedShouldNotCache,
             &Process().originalShouldNotCache, "hook ShouldNotCache failed");
@@ -1883,6 +1897,29 @@ void InstallFuseHooks() {
     const bool useRuntimeElf = module->path.find("!/") != std::string::npos;
     if (useRuntimeElf) {
         __android_log_print(4, kLogTag, "using in-memory ELF parser for embedded library path");
+    }
+
+    if (Process().fuseReqCtx == nullptr) {
+        auto resolved = useRuntimeElf ? ResolveTargetSymbolRuntime(*module, "fuse_req_ctx")
+                                      : ResolveTargetSymbol(*module, "fuse_req_ctx");
+        if (resolved.has_value()) {
+            Process().fuseReqCtx = *resolved;
+            __android_log_print(4, kLogTag, "resolved fuse_req_ctx=%p", *resolved);
+        } else {
+            __android_log_print(
+                5, kLogTag, "fuse_req_ctx unavailable; using architecture-specific AOSP layout");
+        }
+    }
+
+    const DeviceHookInstallPlan installPlan = ResolveDeviceHookInstallPlan(*module);
+    const bool hasClassicStringAbi = HasVerifiedClassicStringAbi(installPlan);
+    __android_log_print(hasClassicStringAbi ? 4 : 5, kLogTag,
+                        "libc++ string ABI=%s profile=%s trusted=%d",
+                        hasClassicStringAbi ? "classic" : "unverified", installPlan.profile.name,
+                        installPlan.profileTrusted ? 1 : 0);
+    if (!hasClassicStringAbi) {
+        __android_log_print(5, kLogTag,
+                            "skipping hooks that decode or construct libc++ string objects");
     }
 
     const DirectoryEntriesAbi directoryEntriesAbi = DetectDirectoryEntriesAbi(*module);

@@ -34,9 +34,9 @@ class DirentFilter final {
                                                bool requireParentMatch = true);
 };
 
-size_t AlignDirentName(size_t nameLen);
-size_t FuseDirentRecordSize(const fuse_dirent* dirent);
-size_t FuseDirentplusRecordSize(const fuse_dirent* dirent);
+bool AlignDirentName(size_t nameLen, size_t* alignedSize);
+bool FuseDirentRecordSize(const fuse_dirent* dirent, size_t available, size_t* recordSize);
+bool FuseDirentplusRecordSize(const fuse_dirent* dirent, size_t available, size_t* recordSize);
 
 bool ShouldFilterTrackedHiddenDirentInode(uint32_t uid, uint64_t childIno, std::string_view name);
 bool ShouldFilterDirentForParentPath(uint32_t uid, std::string_view parentPath, uint64_t childIno,

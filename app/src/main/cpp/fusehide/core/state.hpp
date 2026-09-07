@@ -54,6 +54,13 @@ struct fuse_req {
 };
 typedef struct fuse_req* fuse_req_t;
 
+struct fuse_ctx {
+    uid_t uid;
+    gid_t gid;
+    pid_t pid;
+    mode_t umask;
+};
+
 struct fuse_entry_param {
     uint64_t ino;
     uint64_t generation;
@@ -217,6 +224,7 @@ using LibcMkdirFn = int (*)(const char* path, mode_t mode);
 using LibcMknodFn = int (*)(const char* path, mode_t mode, dev_t device);
 using LibcOpenFn = int (*)(const char* path, int flags, ...);
 using LibcOpen2Fn = int (*)(const char* path, int flags);
+using FuseReqCtxFn = const fuse_ctx* (*)(fuse_req_t req);
 
 inline std::string_view AbiStringView(AbiStringParam raw) {
     if (raw == nullptr) {
@@ -279,6 +287,15 @@ enum class DirectoryEntriesAbi : uint8_t {
     kValue,
 };
 
+enum class AbiStringLayout : uint8_t {
+    // AbiStringView implements libc++'s classic (__long: cap,size,data) layout. libc++ also has an
+    // incompatible alternate layout, so hook installation must require an explicit profile value:
+    // https://android.googlesource.com/platform/external/libcxx/+/4f4a65c06cecf421b56b9fea867d3aa7200f7f1a/include/string#704
+    // https://android.googlesource.com/platform/external/libcxx/+/4f4a65c06cecf421b56b9fea867d3aa7200f7f1a/include/string#734
+    kUnknown,
+    kClassic,
+};
+
 struct PackageHideRule {
     std::string packageName;
     std::vector<std::string> hiddenRootEntryNames;
@@ -335,6 +352,7 @@ struct UidHideRuleCacheEntry {
 // select among known profiles at runtime instead of baking one device's layout globally.
 struct DeviceHookProfile {
     const char* name;
+    AbiStringLayout stringLayout;
     uintptr_t isAppAccessiblePathOffset;
     uintptr_t pfLookupOffset;
     uintptr_t pfLookupPostfilterOffset;
@@ -360,6 +378,7 @@ struct DeviceHookProfile {
 // thunk @ 0x001fdcf8 in Ghidra with image base 0x00100000.
 inline constexpr DeviceHookProfile kDeviceHookProfileLegacy = {
     .name = "legacy_device",
+    .stringLayout = AbiStringLayout::kClassic,
     .isAppAccessiblePathOffset = 0x0007bb5c,
     .pfLookupOffset = 0x00075e48,
     .pfLookupPostfilterOffset = 0x00075f90,
@@ -385,6 +404,7 @@ inline constexpr DeviceHookProfile kDeviceHookProfileLegacy = {
 // thunk @ 0x002073d0 in Ghidra with image base 0x00100000.
 inline constexpr DeviceHookProfile kDeviceHookProfileBp2a = {
     .name = "bp2a_device",
+    .stringLayout = AbiStringLayout::kClassic,
     .isAppAccessiblePathOffset = 0x000e9b94,
     .pfLookupOffset = 0x000e3f94,
     .pfLookupPostfilterOffset = 0x000e40e4,
@@ -407,6 +427,7 @@ inline constexpr DeviceHookProfile kDeviceHookProfileBp2a = {
 
 inline constexpr DeviceHookProfile kDeviceHookProfileV3 = {
     .name = "v3_device",
+    .stringLayout = AbiStringLayout::kClassic,
     .isAppAccessiblePathOffset = 0x000e9df8,
     .pfLookupOffset = 0x000e3f18,
     .pfLookupPostfilterOffset = 0x000e4068,
@@ -429,6 +450,7 @@ inline constexpr DeviceHookProfile kDeviceHookProfileV3 = {
 
 inline constexpr DeviceHookProfile kDeviceHookProfileV6 = {
     .name = "v6_device",
+    .stringLayout = AbiStringLayout::kClassic,
     .isAppAccessiblePathOffset = 0x000e7620,
     .pfLookupOffset = 0x000e1aec,
     .pfLookupPostfilterOffset = 0x000e1c3c,
@@ -460,6 +482,7 @@ inline constexpr DeviceHookProfile kDeviceHookProfileV6 = {
 // elements instead, which is why the container ABIs must never share one wrapper.
 inline constexpr DeviceHookProfile kDeviceHookProfileApi37ValueEntries = {
     .name = "api37_google_value_entries",
+    .stringLayout = AbiStringLayout::kClassic,
     .isAppAccessiblePathOffset = 0x00066270,
     .pfLookupOffset = 0x0005ffc0,
     .pfLookupPostfilterOffset = 0x00060110,
@@ -602,6 +625,7 @@ extern HookOriginal<DoReaddirCommonFn> gOriginalDoReaddirCommon;
 extern HookOriginal<PfFileInfoFn> gOriginalPfGetattr;
 extern HookOriginal<LibcOpenFn> gOriginalOpen;
 extern HookOriginal<LibcOpen2Fn> gOriginalOpen2;
+extern HookOriginal<FuseReqCtxFn> gFuseReqCtx;
 extern HookOriginal<LibcMkdirFn> gOriginalMkdir;
 extern HookOriginal<LibcMknodFn> gOriginalMknod;
 extern HookOriginal<LibcStatFn> gOriginalLstat;

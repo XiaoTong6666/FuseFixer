@@ -1716,8 +1716,11 @@ extern "C" int WrappedMknod(const char* path, mode_t mode, dev_t dev) {
 }
 
 extern "C" int WrappedOpen(const char* path, int flags, ...) {
+    // Match bionic open(): both O_CREAT and the complete O_TMPFILE mask require a mode argument.
+    // https://android.googlesource.com/platform/bionic/+/731631f300090436d7f5df80d50b6275c8c60a93/libc/bionic/open.cpp#47
+    const bool needsMode = (flags & O_CREAT) != 0 || (flags & O_TMPFILE) == O_TMPFILE;
     mode_t mode = 0;
-    if ((flags & O_CREAT) != 0) {
+    if (needsMode) {
         va_list args;
         va_start(args, flags);
         mode = static_cast<mode_t>(va_arg(args, int));
@@ -1739,7 +1742,7 @@ extern "C" int WrappedOpen(const char* path, int flags, ...) {
     }
     const auto fn = gOriginalOpen.get();
     if (fn) {
-        if ((flags & O_CREAT) != 0) {
+        if (needsMode) {
             const int ret = fn(path, flags, mode);
             if (ret >= 0 && gActiveCreateScopeDepth != 0 && PathHasVisibleRootParent(pathView)) {
                 BumpRootSnapshotParentGeneration("lower_open_create");

@@ -16,16 +16,45 @@
 
 namespace fusehide {
 
-size_t AlignDirentName(size_t nameLen) {
-    return (nameLen + sizeof(uint64_t) - 1) & ~(sizeof(uint64_t) - 1);
+bool AlignDirentName(size_t nameLen, size_t* alignedSize) {
+    // Mirror the FUSE UAPI's 64-bit record alignment, but check the addition before applying it:
+    // https://android.googlesource.com/kernel/common/+/2837d873ec71152d7599676357d34f94764f061b/include/uapi/linux/fuse.h#1062
+    constexpr size_t kAlignment = sizeof(uint64_t);
+    if (alignedSize == nullptr || nameLen > SIZE_MAX - (kAlignment - 1)) {
+        return false;
+    }
+    *alignedSize = (nameLen + kAlignment - 1) & ~(kAlignment - 1);
+    return true;
 }
 
-size_t FuseDirentRecordSize(const fuse_dirent* dirent) {
-    return offsetof(fuse_dirent, name) + AlignDirentName(dirent->namelen);
+bool FuseDirentRecordSize(const fuse_dirent* dirent, size_t available, size_t* recordSize) {
+    constexpr size_t kHeaderSize = offsetof(fuse_dirent, name);
+    if (dirent == nullptr || recordSize == nullptr || available < kHeaderSize ||
+        dirent->namelen > available - kHeaderSize) {
+        return false;
+    }
+    size_t alignedNameSize = 0;
+    if (!AlignDirentName(dirent->namelen, &alignedNameSize) ||
+        alignedNameSize > available - kHeaderSize) {
+        return false;
+    }
+    *recordSize = kHeaderSize + alignedNameSize;
+    return true;
 }
 
-size_t FuseDirentplusRecordSize(const fuse_dirent* dirent) {
-    return kFuseEntryOutWireSize + offsetof(fuse_dirent, name) + AlignDirentName(dirent->namelen);
+bool FuseDirentplusRecordSize(const fuse_dirent* dirent, size_t available, size_t* recordSize) {
+    constexpr size_t kHeaderSize = kFuseEntryOutWireSize + offsetof(fuse_dirent, name);
+    if (dirent == nullptr || recordSize == nullptr || available < kHeaderSize ||
+        dirent->namelen > available - kHeaderSize) {
+        return false;
+    }
+    size_t alignedNameSize = 0;
+    if (!AlignDirentName(dirent->namelen, &alignedNameSize) ||
+        alignedNameSize > available - kHeaderSize) {
+        return false;
+    }
+    *recordSize = kHeaderSize + alignedNameSize;
+    return true;
 }
 
 bool ShouldFilterTrackedHiddenDirentInode(uint32_t uid, uint64_t childIno, std::string_view name) {
@@ -66,10 +95,10 @@ bool DirentFilter::BuildFilteredDirentPayload(const char* data, size_t size, uin
     out->reserve(size);
     size_t offset = 0;
     size_t removed = 0;
-    while (offset + offsetof(fuse_dirent, name) <= size) {
+    while (offset <= size && size - offset >= offsetof(fuse_dirent, name)) {
         const auto* dirent = reinterpret_cast<const fuse_dirent*>(data + offset);
-        const size_t recordSize = FuseDirentRecordSize(dirent);
-        if (recordSize == 0 || offset + recordSize > size) {
+        size_t recordSize = 0;
+        if (!FuseDirentRecordSize(dirent, size - offset, &recordSize)) {
             return false;
         }
         const std::string_view name(dirent->name, dirent->namelen);
@@ -101,10 +130,10 @@ bool BuildFilteredDirentPayloadForParentPath(const char* data, size_t size, uint
     out->reserve(size);
     size_t offset = 0;
     size_t removed = 0;
-    while (offset + offsetof(fuse_dirent, name) <= size) {
+    while (offset <= size && size - offset >= offsetof(fuse_dirent, name)) {
         const auto* dirent = reinterpret_cast<const fuse_dirent*>(data + offset);
-        const size_t recordSize = FuseDirentRecordSize(dirent);
-        if (recordSize == 0 || offset + recordSize > size) {
+        size_t recordSize = 0;
+        if (!FuseDirentRecordSize(dirent, size - offset, &recordSize)) {
             return false;
         }
         const std::string_view name(dirent->name, dirent->namelen);
@@ -136,11 +165,12 @@ bool DirentFilter::BuildFilteredDirentplusPayload(const char* data, size_t size,
     out->reserve(size);
     size_t offset = 0;
     size_t removed = 0;
-    while (offset + kFuseEntryOutWireSize + offsetof(fuse_dirent, name) <= size) {
+    constexpr size_t kHeaderSize = kFuseEntryOutWireSize + offsetof(fuse_dirent, name);
+    while (offset <= size && size - offset >= kHeaderSize) {
         const auto* dirent =
             reinterpret_cast<const fuse_dirent*>(data + offset + kFuseEntryOutWireSize);
-        const size_t recordSize = FuseDirentplusRecordSize(dirent);
-        if (recordSize == 0 || offset + recordSize > size) {
+        size_t recordSize = 0;
+        if (!FuseDirentplusRecordSize(dirent, size - offset, &recordSize)) {
             return false;
         }
         const std::string_view name(dirent->name, dirent->namelen);
@@ -172,11 +202,12 @@ bool BuildFilteredDirentplusPayloadForParentPath(const char* data, size_t size, 
     out->reserve(size);
     size_t offset = 0;
     size_t removed = 0;
-    while (offset + kFuseEntryOutWireSize + offsetof(fuse_dirent, name) <= size) {
+    constexpr size_t kHeaderSize = kFuseEntryOutWireSize + offsetof(fuse_dirent, name);
+    while (offset <= size && size - offset >= kHeaderSize) {
         const auto* dirent =
             reinterpret_cast<const fuse_dirent*>(data + offset + kFuseEntryOutWireSize);
-        const size_t recordSize = FuseDirentplusRecordSize(dirent);
-        if (recordSize == 0 || offset + recordSize > size) {
+        size_t recordSize = 0;
+        if (!FuseDirentplusRecordSize(dirent, size - offset, &recordSize)) {
             return false;
         }
         const std::string_view name(dirent->name, dirent->namelen);
